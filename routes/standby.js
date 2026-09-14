@@ -61,7 +61,7 @@ router.put('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
 });
 
 router.patch('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
-  const allowed = ['status', 'slot_id', 'booked_date', 'booked_time', 'pilot_name'];
+  const allowed = ['status', 'slot_id', 'booked_date', 'booked_time', 'pilot_name', 'processing_by'];
   const updates = Object.keys(req.body).filter(k => allowed.includes(k));
   if (updates.length === 0) return res.status(400).json({ error: 'Aucun champ valide' });
   const set = updates.map((k, i) => `${k}=$${i + 1}`).join(', ');
