@@ -744,6 +744,33 @@ router.post('/api/public/aravis/request', aravisRequestLimiter, async (req, res)
         notesWithFlight,
       ]
     );
+
+    // SMS aux admins ayant activé les notifications de demande
+    if (process.env.BREVO_API_KEY) {
+      try {
+        const { rows: admins } = await pool.query(
+          `SELECT phone, first_name, request_notification_sms FROM users WHERE notify_on_request = true AND phone IS NOT NULL`
+        );
+        for (const admin of admins) {
+          const defaultMsg = `Nouvelle demande Aravis : ${name || 'anonyme'}${phone ? ` (${phone})` : ''}${flight_type ? ` — ${flight_type}` : ''}${requested_date ? ` le ${requested_date}` : ''}.`;
+          const message = (admin.request_notification_sms || defaultMsg)
+            .replace(/\[NOM\]/g, name || '')
+            .replace(/\[TELE\]/g, phone || '')
+            .replace(/\[VOL\]/g, flight_type || '')
+            .replace(/\[DATE\]/g, requested_date || '');
+          let adminPhone = admin.phone.replace(/\s+/g, '');
+          if (adminPhone.startsWith('0')) adminPhone = '+33' + adminPhone.substring(1);
+          await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
+            method: 'POST',
+            headers: { 'accept': 'application/json', 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json' },
+            body: JSON.stringify({ type: 'transactional', sender: 'ARAVIS', recipient: adminPhone, content: message })
+          });
+        }
+      } catch (smsErr) {
+        console.error('[Aravis request SMS]', smsErr);
+      }
+    }
+
     res.json({ success: true, id: rows[0].id });
   } catch (err) {
     console.error('[Aravis request]', err);

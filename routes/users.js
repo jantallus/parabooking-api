@@ -9,26 +9,26 @@ const { CreateUserSchema, UpdateUserSchema } = require('../schemas');
 
 router.get('/api/users', authenticateAdminOrPartner, async (req, res) => {
   try {
-    const r = await pool.query('SELECT id, first_name, email, phone, role, enseigne, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status FROM users ORDER BY first_name ASC');
+    const r = await pool.query('SELECT id, first_name, email, phone, role, enseigne, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, notify_on_request, request_notification_sms FROM users ORDER BY first_name ASC');
     res.json(r.rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/api/users', authenticateAdminOrPartner, validate(CreateUserSchema), async (req, res) => {
-  const { first_name, email, phone, password, role, enseigne, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
+  const { first_name, email, phone, password, role, enseigne, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, available_start_date, available_end_date, daily_start_time, daily_end_time, notify_on_request, request_notification_sms } = req.body;
   try {
     const hash = await bcrypt.hash(password, 10);
     const r = await pool.query(
-      `INSERT INTO users (first_name, email, phone, password_hash, role, enseigne, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, available_start_date, available_end_date, daily_start_time, daily_end_time)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'Actif', $12, $13, $14, $15) RETURNING id, first_name, role, enseigne`,
-      [first_name, email, phone || null, hash, role, enseigne || 'fluide', is_active_monitor, google_sync_enabled ?? false, receives_online_payments ?? false, commission_type || 'none', commission_value || 0, available_start_date || null, available_end_date || null, daily_start_time || null, daily_end_time || null]
+      `INSERT INTO users (first_name, email, phone, password_hash, role, enseigne, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, available_start_date, available_end_date, daily_start_time, daily_end_time, notify_on_request, request_notification_sms)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'Actif', $12, $13, $14, $15, $16, $17) RETURNING id, first_name, role, enseigne`,
+      [first_name, email, phone || null, hash, role, enseigne || 'fluide', is_active_monitor, google_sync_enabled ?? false, receives_online_payments ?? false, commission_type || 'none', commission_value || 0, available_start_date || null, available_end_date || null, daily_start_time || null, daily_end_time || null, notify_on_request ?? false, request_notification_sms || null]
     );
     res.json(r.rows[0]);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), async (req, res) => {
-  const { first_name, email, phone, role, enseigne, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
+  const { first_name, email, phone, role, enseigne, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time, notify_on_request, request_notification_sms } = req.body;
   try {
     if (!['admin', 'aravis'].includes(req.user.role) && req.user.id !== parseInt(req.params.id)) {
       return res.status(403).json({ error: "Interdit : Vous ne pouvez modifier que votre propre profil." });
@@ -67,13 +67,13 @@ router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), asy
     if (password) {
        const hash = await bcrypt.hash(password, 10);
        await pool.query(
-         'UPDATE users SET first_name=$1, email=$2, phone=$3, role=$4, enseigne=$5, is_active_monitor=$6, google_sync_enabled=$7, receives_online_payments=$8, commission_type=$9, commission_value=$10, status=$11, password_hash=$12, available_start_date=$13, available_end_date=$14, daily_start_time=$15, daily_end_time=$16 WHERE id=$17',
-         [first_name, email, phone || null, finalRole, finalEnseigne || 'fluide', finalActive, finalGoogleSync, finalOnline, finalCommType || 'none', finalCommValue ?? 0, finalStatus, hash, startD, endD, startT, endT, req.params.id]
+         'UPDATE users SET first_name=$1, email=$2, phone=$3, role=$4, enseigne=$5, is_active_monitor=$6, google_sync_enabled=$7, receives_online_payments=$8, commission_type=$9, commission_value=$10, status=$11, password_hash=$12, available_start_date=$13, available_end_date=$14, daily_start_time=$15, daily_end_time=$16, notify_on_request=$17, request_notification_sms=$18 WHERE id=$19',
+         [first_name, email, phone || null, finalRole, finalEnseigne || 'fluide', finalActive, finalGoogleSync, finalOnline, finalCommType || 'none', finalCommValue ?? 0, finalStatus, hash, startD, endD, startT, endT, notify_on_request ?? false, request_notification_sms || null, req.params.id]
        );
     } else {
        await pool.query(
-         'UPDATE users SET first_name=$1, email=$2, phone=$3, role=$4, enseigne=$5, is_active_monitor=$6, google_sync_enabled=$7, receives_online_payments=$8, commission_type=$9, commission_value=$10, status=$11, available_start_date=$12, available_end_date=$13, daily_start_time=$14, daily_end_time=$15 WHERE id=$16',
-         [first_name, email, phone || null, finalRole, finalEnseigne || 'fluide', finalActive, finalGoogleSync, finalOnline, finalCommType || 'none', finalCommValue ?? 0, finalStatus, startD, endD, startT, endT, req.params.id]
+         'UPDATE users SET first_name=$1, email=$2, phone=$3, role=$4, enseigne=$5, is_active_monitor=$6, google_sync_enabled=$7, receives_online_payments=$8, commission_type=$9, commission_value=$10, status=$11, available_start_date=$12, available_end_date=$13, daily_start_time=$14, daily_end_time=$15, notify_on_request=$16, request_notification_sms=$17 WHERE id=$18',
+         [first_name, email, phone || null, finalRole, finalEnseigne || 'fluide', finalActive, finalGoogleSync, finalOnline, finalCommType || 'none', finalCommValue ?? 0, finalStatus, startD, endD, startT, endT, notify_on_request ?? false, request_notification_sms || null, req.params.id]
        );
     }
     res.json({ success: true });
