@@ -32,15 +32,33 @@ router.get('/api/standby', authenticateAdminOrPartner, async (req, res) => {
 });
 
 router.post('/api/standby', authenticateAdminOrPartner, async (req, res) => {
-  const { name, phone, email, nb_passengers, flight_type, weight_info, availability_text, availability_start, availability_end, notes } = req.body;
+  const { name, phone, email, nb_passengers, flight_type, weight_info, availability_text, availability_start, availability_end, notes, source } = req.body;
   try {
     const { rows } = await pool.query(
-      `INSERT INTO standby_clients (name, phone, email, nb_passengers, flight_type, weight_info, availability_text, availability_start, availability_end, notes, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending') RETURNING *`,
+      `INSERT INTO standby_clients (name, phone, email, nb_passengers, flight_type, weight_info, availability_text, availability_start, availability_end, notes, status, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11) RETURNING *`,
       [name||null, phone||null, email||null, nb_passengers||1, flight_type||null, weight_info||null, availability_text||null,
-       availability_start||null, availability_end||null, notes||null]
+       availability_start||null, availability_end||null, notes||null, source||null]
     );
     res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
+router.get('/api/standby/free-monitors', authenticateAdminOrPartner, async (req, res) => {
+  const { date, time, enseigne } = req.query;
+  if (!date) return res.json([]);
+  try {
+    const monitorsRes = await pool.query(
+      `SELECT id, first_name FROM users WHERE is_active_monitor = true${enseigne ? " AND enseigne = $1" : ""} ORDER BY first_name`,
+      enseigne ? [enseigne] : []
+    );
+    if (!time) return res.json(monitorsRes.rows);
+    const bookedRes = await pool.query(
+      `SELECT DISTINCT monitor_id FROM slots WHERE start_time::date = $1 AND to_char(start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') = $2 AND status = 'booked'`,
+      [date, time]
+    );
+    const bookedIds = new Set(bookedRes.rows.map(r => r.monitor_id?.toString()));
+    res.json(monitorsRes.rows.filter(m => !bookedIds.has(m.id?.toString())));
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
@@ -89,7 +107,7 @@ router.put('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
 });
 
 router.patch('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
-  const allowed = ['status', 'slot_id', 'booked_date', 'booked_time', 'pilot_name', 'processing_by'];
+  const allowed = ['status', 'slot_id', 'booked_date', 'booked_time', 'pilot_name', 'processing_by', 'source'];
   const updates = Object.keys(req.body).filter(k => allowed.includes(k));
   if (updates.length === 0) return res.status(400).json({ error: 'Aucun champ valide' });
   const set = updates.map((k, i) => `${k}=$${i + 1}`).join(', ');

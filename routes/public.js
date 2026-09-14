@@ -729,8 +729,8 @@ router.post('/api/public/aravis/request', aravisRequestLimiter, async (req, res)
     const { rows } = await pool.query(
       `INSERT INTO standby_clients
         (name, phone, email, nb_passengers, flight_type, weight_info,
-         availability_text, availability_start, availability_end, notes, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending') RETURNING id`,
+         availability_text, availability_start, availability_end, notes, status, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending','aravis') RETURNING id`,
       [
         name || null,
         phone || null,
