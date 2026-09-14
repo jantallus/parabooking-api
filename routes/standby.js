@@ -49,9 +49,7 @@ router.get('/api/standby/free-monitors', authenticateAdminOrPartner, async (req,
   if (!date) return res.json([]);
   try {
     const monitorsRes = await pool.query(
-      enseigne === 'aravis'
-        ? `SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif' AND enseigne = 'aravis' ORDER BY first_name`
-        : `SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif' AND (enseigne = 'fluide' OR enseigne IS NULL) ORDER BY first_name`,
+      `SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif' ORDER BY first_name`,
       []
     );
     if (!time) return res.json(monitorsRes.rows);
