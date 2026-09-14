@@ -85,6 +85,8 @@ const CreateUserSchema = z.object({
   available_end_date:       zDateOpt,
   daily_start_time:         zTimeOpt,
   daily_end_time:           zTimeOpt,
+  notify_on_request:        z.boolean().optional().default(false),
+  request_notification_sms: z.string().max(500).optional().nullable(),
 });
 
 const UpdateUserSchema = z.object({
@@ -104,6 +106,8 @@ const UpdateUserSchema = z.object({
   available_end_date:       zDateOpt,
   daily_start_time:         zTimeOpt,
   daily_end_time:           zTimeOpt,
+  notify_on_request:        z.boolean().optional(),
+  request_notification_sms: z.string().max(500).optional().nullable(),
 });
 
 
