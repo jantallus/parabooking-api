@@ -45,20 +45,22 @@ router.post('/api/standby', authenticateAdminOrPartner, async (req, res) => {
 });
 
 router.get('/api/standby/free-monitors', authenticateAdminOrPartner, async (req, res) => {
-  const { date, time, enseigne } = req.query;
-  if (!date) return res.json([]);
+  const { date, time } = req.query;
+  if (!date || !time) return res.json([]);
   try {
-    const monitorsRes = await pool.query(
-      `SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif' ORDER BY first_name`,
-      []
-    );
-    if (!time) return res.json(monitorsRes.rows);
-    const bookedRes = await pool.query(
-      `SELECT DISTINCT monitor_id FROM slots WHERE start_time::date = $1 AND to_char(start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') = $2 AND status = 'booked'`,
+    const result = await pool.query(
+      `SELECT u.id, u.first_name, s.id AS slot_id
+       FROM slots s
+       JOIN users u ON s.monitor_id::text = u.id::text
+       WHERE s.start_time::date = $1
+         AND to_char(s.start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') = $2
+         AND s.status = 'available'
+         AND u.is_active_monitor = true
+         AND u.status = 'Actif'
+       ORDER BY u.first_name`,
       [date, time]
     );
-    const bookedIds = new Set(bookedRes.rows.map(r => r.monitor_id?.toString()));
-    res.json(monitorsRes.rows.filter(m => !bookedIds.has(m.id?.toString())));
+    res.json(result.rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
