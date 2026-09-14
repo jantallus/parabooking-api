@@ -28,6 +28,18 @@ router.post('/api/standby', authenticateAdminOrPartner, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
+router.get('/api/standby/new-count', authenticateAdminOrPartner, async (req, res) => {
+  const { since } = req.query;
+  try {
+    const ts = since ? new Date(since) : new Date(0);
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM standby_clients WHERE created_at > $1`,
+      [ts]
+    );
+    res.json({ count: rows[0].count });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
 router.put('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
   const { name, phone, email, nb_passengers, flight_type, weight_info, availability_text, availability_start, availability_end, notes, pilot_name, booked_date, booked_time, slot_id, status } = req.body;
   try {
