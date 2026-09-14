@@ -763,7 +763,7 @@ router.post('/api/public/aravis/request', aravisRequestLimiter, async (req, res)
           await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
             method: 'POST',
             headers: { 'accept': 'application/json', 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json' },
-            body: JSON.stringify({ type: 'transactional', sender: 'ARAVIS', recipient: adminPhone, content: message })
+            body: JSON.stringify({ type: 'transactional', sender: 'FLUIDE', recipient: adminPhone, content: message })
           });
         }
       } catch (smsErr) {
