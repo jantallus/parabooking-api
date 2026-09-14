@@ -7,7 +7,18 @@ router.get('/api/standby', authenticateAdminOrPartner, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT sc.*,
-         COALESCE(sc.pilot_name, u.first_name) AS monitor_name
+         COALESCE(sc.pilot_name, u.first_name) AS monitor_name,
+         CASE WHEN sc.slot_id IS NOT NULL AND sc.booked_date IS NOT NULL THEN (
+           SELECT json_agg(json_build_object(
+             'flight_type', COALESCE(ft2.name, sc.flight_type),
+             'monitor', u2.first_name
+           ) ORDER BY s2.start_time)
+           FROM slots s2
+           LEFT JOIN flight_types ft2 ON s2.flight_type_id::text = ft2.id::text
+           LEFT JOIN users u2 ON s2.monitor_id::text = u2.id::text
+           WHERE s2.start_time::date = sc.booked_date::date
+             AND (s2.title = sc.name OR s2.title LIKE 'Passager % (' || sc.name || ')')
+         ) END AS related_flights
        FROM standby_clients sc
        LEFT JOIN slots s ON sc.slot_id = s.id
        LEFT JOIN users u ON s.monitor_id::text = u.id::text
