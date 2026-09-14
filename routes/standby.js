@@ -44,6 +44,24 @@ router.post('/api/standby', authenticateAdminOrPartner, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
+router.get('/api/standby/available-times', authenticateAdminOrPartner, async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.json([]);
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT to_char(s.start_time, 'HH24:MI') AS time
+       FROM slots s
+       JOIN users u ON s.monitor_id::text = u.id::text
+       WHERE start_time::date = $1
+         AND s.status = 'available'
+         AND u.is_active_monitor = true
+       ORDER BY time`,
+      [date]
+    );
+    res.json(result.rows.map(r => r.time));
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
 router.get('/api/standby/free-monitors', authenticateAdminOrPartner, async (req, res) => {
   const { date, time } = req.query;
   if (!date || !time) return res.json([]);
