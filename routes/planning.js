@@ -371,18 +371,40 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
 
     if (!forceOverwrite) {
         const checkQuery = `
-          SELECT COUNT(*) FROM slots 
-          WHERE start_time::date >= $1 
-          AND start_time::date <= $2 
+          SELECT COUNT(*) FROM slots
+          WHERE start_time::date >= $1
+          AND start_time::date <= $2
           AND ((title IS NOT NULL AND title != '' AND title != '☕ PAUSE' AND UPPER(title) NOT LIKE 'NON DISPO%') OR (notes IS NOT NULL AND trim(notes) != '' AND UPPER(COALESCE(title, '')) NOT LIKE 'NON DISPO%'))
           ${monitorFilterDelete}
         `;
         const check = await client.query(checkQuery, paramsDelete);
         if (parseInt(check.rows[0].count) > 0) {
-            await client.query('ROLLBACK'); 
+            await client.query('ROLLBACK');
             return res.status(409).json({
                 warning: true,
                 message: `⚠️ ATTENTION : Il y a ${check.rows[0].count} réservation(s) ou note(s) importante(s) sur cette période. Voulez-vous VRAIMENT tout écraser ?`
+            });
+        }
+    }
+
+    // Vérifie que les AUTRES pilotes sur ces jours n'ont pas un plan différent
+    if (monitor_ids && monitor_ids.length > 0) {
+        const planCheck = await client.query(
+            `SELECT DISTINCT plan_name FROM slots
+             WHERE start_time::date >= $1
+               AND start_time::date <= $2
+               AND monitor_id != ALL($3)
+               AND plan_name IS NOT NULL
+               AND plan_name != ''`,
+            [startDate, endDate, monitor_ids]
+        );
+        const existingPlans = planCheck.rows.map(r => r.plan_name).filter(p => p !== plan);
+        if (existingPlans.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                planConflict: true,
+                message: `❌ Impossible : d'autres pilotes ont déjà des créneaux générés avec le plan « ${existingPlans[0]} » sur cette période. Choisissez ce même plan pour rester cohérent.`,
+                existingPlan: existingPlans[0],
             });
         }
     }
@@ -425,9 +447,9 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
               const isBlocked = !isPause && (isUnavailable || (blocked_pilot_ids && blocked_pilot_ids.includes(String(m.id))));
               const slotStatus = isPause || isBlocked ? 'booked' : 'available';
               const slotTitle = isPause ? '☕ PAUSE' : isBlocked ? 'NON DISPO' : null;
-              placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
-              values.push(m.id, startTS, d.duration_minutes, slotStatus, slotTitle);
-              paramIndex += 5; 
+              placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4}, $${paramIndex+5})`);
+              values.push(m.id, startTS, d.duration_minutes, slotStatus, slotTitle, isPause ? null : plan);
+              paramIndex += 6;
             }
           }
       }
@@ -435,7 +457,7 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
     }
 
     if (placeholders.length > 0) {
-      await client.query(`INSERT INTO slots (monitor_id, start_time, end_time, status, title) VALUES ${placeholders.join(', ')}`, values);
+      await client.query(`INSERT INTO slots (monitor_id, start_time, end_time, status, title, plan_name) VALUES ${placeholders.join(', ')}`, values);
     }
 
     await client.query('COMMIT');
