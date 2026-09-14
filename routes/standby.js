@@ -53,7 +53,7 @@ router.get('/api/standby/free-monitors', authenticateAdminOrPartner, async (req,
        FROM slots s
        JOIN users u ON s.monitor_id::text = u.id::text
        WHERE start_time::date = $1
-         AND to_char(s.start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') = $2
+         AND to_char(s.start_time, 'HH24:MI') = $2
          AND s.status = 'available'
          AND u.is_active_monitor = true
        ORDER BY u.first_name`,
