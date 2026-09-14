@@ -49,7 +49,7 @@ router.get('/api/standby/free-monitors', authenticateAdminOrPartner, async (req,
   if (!date || !time) return res.json([]);
   try {
     const result = await pool.query(
-      `SELECT u.id, u.first_name, s.id AS slot_id
+      `SELECT u.id, u.first_name, s.id AS slot_id, s.flight_type_id
        FROM slots s
        JOIN users u ON s.monitor_id::text = u.id::text
        WHERE start_time::date = $1
