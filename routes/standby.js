@@ -48,17 +48,26 @@ router.get('/api/standby/free-monitors', authenticateAdminOrPartner, async (req,
   const { date, time } = req.query;
   if (!date || !time) return res.json([]);
   try {
+    // Debug: log what slots exist on that date regardless of time/status
+    const debug = await pool.query(
+      `SELECT s.id, s.status, s.monitor_id, to_char(s.start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') AS heure
+       FROM slots s WHERE start_time::date = $1 LIMIT 20`,
+      [date]
+    );
+    console.log('[free-monitors] date=%s time=%s slots on that day:', date, time, JSON.stringify(debug.rows));
+
     const result = await pool.query(
       `SELECT u.id, u.first_name, s.id AS slot_id
        FROM slots s
-       JOIN users u ON s.monitor_id = u.id
-       WHERE (s.start_time AT TIME ZONE 'Europe/Paris')::date = $1::date
+       JOIN users u ON s.monitor_id::text = u.id::text
+       WHERE start_time::date = $1
          AND to_char(s.start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') = $2
          AND s.status = 'available'
          AND u.is_active_monitor = true
        ORDER BY u.first_name`,
       [date, time]
     );
+    console.log('[free-monitors] result:', JSON.stringify(result.rows));
     res.json(result.rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
