@@ -593,11 +593,26 @@ router.get('/api/ical/:id', async (req, res) => {
 // /api/public/availabilities (périodes moniteur + Google Calendar sync).
 
 router.get('/api/public/aravis/slots', availabilitiesLimiter, async (req, res) => {
-  const { from, to, duration } = req.query;
+  const { from, to, duration, flight_type_id } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'Paramètres from et to requis (YYYY-MM-DD).' });
   const flightDuration = duration ? parseInt(duration, 10) : null;
 
   try {
+    // Horaires autorisés et durée si flight_type_id fourni
+    let allowedTimeSlots = [];
+    let ftDuration = flightDuration;
+    if (flight_type_id) {
+      const ftRes = await pool.query(
+        `SELECT duration_minutes, allowed_time_slots FROM flight_types WHERE id = $1 AND is_active = true`,
+        [flight_type_id]
+      );
+      if (ftRes.rows.length > 0) {
+        allowedTimeSlots = ftRes.rows[0].allowed_time_slots || [];
+        if (!ftDuration && ftRes.rows[0].duration_minutes) ftDuration = ftRes.rows[0].duration_minutes;
+      }
+    }
+
+    // Tous les créneaux de la période (disponibles uniquement)
     const { rows: rawSlots } = await pool.query(
       `SELECT id, start_time, end_time, status, monitor_id
        FROM slots
@@ -629,11 +644,24 @@ router.get('/api/public/aravis/slots', availabilitiesLimiter, async (req, res) =
     const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
     const isGoogleSyncEnabled = syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true';
 
+    // { date: { heure: capacité } }
     const grouped = {};
+
     for (const slot of rawSlots) {
       const slotStart = new Date(slot.start_time);
-      const dateStr = slotStart.toISOString().slice(0, 10);
-      const timeStr = slotStart.toISOString().slice(11, 16);
+      // Heure locale Paris (référence réelle du planning)
+      const dateStr = slotStart.toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
+      const timeStr = slotStart.toLocaleTimeString('en-GB', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false });
+
+      // Filtre durée minimale — on ne subdivise pas, on vérifie juste que le créneau est assez long
+      if (ftDuration && !isNaN(ftDuration)) {
+        const slotEnd = new Date(slot.end_time);
+        const slotDurationMin = (slotEnd - slotStart) / 60000;
+        if (slotDurationMin < ftDuration) continue;
+      }
+
+      // Filtre horaires autorisés (allowed_time_slots du type de vol)
+      if (allowedTimeSlots.length > 0 && !allowedTimeSlots.includes(timeStr)) continue;
 
       // Filtre période moniteur
       const periods = monitorAvailMap[slot.monitor_id];
@@ -650,29 +678,16 @@ router.get('/api/public/aravis/slots', availabilitiesLimiter, async (req, res) =
         if (isBusy) continue;
       }
 
-      if (!grouped[dateStr]) grouped[dateStr] = new Set();
-
-      if (flightDuration && !isNaN(flightDuration)) {
-        const slotEnd = new Date(slot.end_time);
-        const slotDurationMin = (slotEnd - slotStart) / 60000;
-        if (flightDuration < slotDurationMin) {
-          // Subdivise le créneau en sous-créneaux de flightDuration minutes
-          let sub = new Date(slotStart);
-          while (sub.getTime() + flightDuration * 60000 <= slotEnd.getTime()) {
-            grouped[dateStr].add(sub.toISOString().slice(11, 16));
-            sub = new Date(sub.getTime() + flightDuration * 60000);
-          }
-        } else {
-          grouped[dateStr].add(timeStr);
-        }
-      } else {
-        grouped[dateStr].add(timeStr);
-      }
+      if (!grouped[dateStr]) grouped[dateStr] = {};
+      grouped[dateStr][timeStr] = (grouped[dateStr][timeStr] || 0) + 1;
     }
 
+    // Tri des heures dans chaque jour
     const result = {};
     for (const [date, times] of Object.entries(grouped)) {
-      result[date] = [...times].sort();
+      result[date] = Object.fromEntries(
+        Object.entries(times).sort(([a], [b]) => a.localeCompare(b))
+      );
     }
 
     res.json(result);
