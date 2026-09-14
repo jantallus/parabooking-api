@@ -6,10 +6,15 @@ const { authenticateAdminOrPartner } = require('../middleware/auth');
 router.get('/api/standby', authenticateAdminOrPartner, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM standby_clients ORDER BY
-        CASE status WHEN 'done' THEN 2 WHEN 'scheduled' THEN 1 ELSE 0 END,
-        CASE WHEN availability_start IS NOT NULL THEN availability_start ELSE created_at::date END ASC,
-        created_at ASC`
+      `SELECT sc.*,
+         COALESCE(sc.pilot_name, u.first_name) AS monitor_name
+       FROM standby_clients sc
+       LEFT JOIN slots s ON sc.slot_id = s.id
+       LEFT JOIN users u ON s.monitor_id::text = u.id::text
+       ORDER BY
+         CASE sc.status WHEN 'done' THEN 2 WHEN 'scheduled' THEN 1 ELSE 0 END,
+         CASE WHEN sc.availability_start IS NOT NULL THEN sc.availability_start ELSE sc.created_at::date END ASC,
+         sc.created_at ASC`
     );
     res.json(rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
