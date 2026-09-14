@@ -51,12 +51,11 @@ router.get('/api/standby/free-monitors', authenticateAdminOrPartner, async (req,
     const result = await pool.query(
       `SELECT u.id, u.first_name, s.id AS slot_id
        FROM slots s
-       JOIN users u ON s.monitor_id::text = u.id::text
-       WHERE s.start_time::date = $1
+       JOIN users u ON s.monitor_id = u.id
+       WHERE (s.start_time AT TIME ZONE 'Europe/Paris')::date = $1::date
          AND to_char(s.start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') = $2
          AND s.status = 'available'
          AND u.is_active_monitor = true
-         AND u.status = 'Actif'
        ORDER BY u.first_name`,
       [date, time]
     );
