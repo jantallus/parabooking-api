@@ -28,6 +28,18 @@ router.post('/api/standby', authenticateAdminOrPartner, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
+router.get('/api/standby/by-slot-ids', authenticateAdminOrPartner, async (req, res) => {
+  const ids = (req.query.ids || '').split(',').map(Number).filter(n => n > 0);
+  if (ids.length === 0) return res.json([]);
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, phone, status FROM standby_clients WHERE slot_id = ANY($1)`,
+      [ids]
+    );
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
 router.get('/api/standby/new-count', authenticateAdminOrPartner, async (req, res) => {
   const { since } = req.query;
   try {
