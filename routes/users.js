@@ -167,7 +167,8 @@ router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
              commission_type, commission_value,
              TO_CHAR(available_start_date, 'YYYY-MM-DD') as available_start_date,
              TO_CHAR(available_end_date, 'YYYY-MM-DD') as available_end_date,
-             daily_start_time, daily_end_time
+             daily_start_time, daily_end_time,
+             notify_on_request, request_notification_sms
       FROM users
       WHERE LOWER(role) IN ('admin', 'permanent', 'monitor', 'aravis', 'aravis_admin')
     `;
