@@ -29,7 +29,7 @@ router.post('/api/login', loginLimiter, async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, enseigne: user.enseigne || 'fluide' },
+      { id: user.id, email: user.email, role: user.role, enseigne: user.enseigne || (user.role === 'aravis' ? 'aravis' : 'fluide') },
       JWT_SECRET,
       { expiresIn: '30m' }
     );
@@ -46,7 +46,7 @@ router.post('/api/login', loginLimiter, async (req, res) => {
 
     res.json({
       token, // Nécessaire pour l'authentification des requêtes admin
-      user: { id: user.id, first_name: user.first_name, email: user.email, role: user.role, enseigne: user.enseigne || 'fluide' }
+      user: { id: user.id, first_name: user.first_name, email: user.email, role: user.role, enseigne: user.enseigne || (user.role === 'aravis' ? 'aravis' : 'fluide') }
     });
 
   } catch (err) {
