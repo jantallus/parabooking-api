@@ -13,7 +13,7 @@ async function logSlotHistory(slotId, action, userEmail) {
   try {
     const r = await pool.query(
       `SELECT s.id, s.title, s.status, s.phone, s.email, s.notes, s.weight,
-              s.flight_type_id, ft.name AS flight_type_name,
+              s.flight_type_id, ft.name AS flight_type_name, ft.tenant AS flight_type_tenant,
               s.second_booking, s.payment_data, s.monitor_id,
               TO_CHAR(s.start_time, 'YYYY-MM-DD HH24:MI') AS start_time,
               TO_CHAR(s.end_time,   'YYYY-MM-DD HH24:MI') AS end_time
