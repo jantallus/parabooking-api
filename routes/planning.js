@@ -8,6 +8,27 @@ const { QuickPatchSchema } = require('../schemas');
 const { googleSyncCache, invalidateCacheForMonitor } = require('../services/googleSync');
 const { notifyGoogleCalendar, deleteGoogleCalendarEvent } = require('../services/email');
 
+// Enregistre un snapshot du créneau dans l'historique avant chaque mutation significative
+async function logSlotHistory(slotId, action, userEmail) {
+  try {
+    const r = await pool.query(
+      `SELECT id, title, status, phone, email, notes, weight, flight_type_id,
+              second_booking, payment_data, monitor_id,
+              TO_CHAR(start_time AT TIME ZONE 'Europe/Paris', 'YYYY-MM-DD HH24:MI') AS start_time,
+              TO_CHAR(end_time   AT TIME ZONE 'Europe/Paris', 'YYYY-MM-DD HH24:MI') AS end_time
+       FROM slots WHERE id = $1`, [slotId]
+    );
+    if (r.rows.length === 0) return;
+    await pool.query(
+      `INSERT INTO slot_history (slot_id, action, changed_by_email, snapshot)
+       VALUES ($1, $2, $3, $4)`,
+      [slotId, action, userEmail || null, JSON.stringify(r.rows[0])]
+    );
+  } catch (e) {
+    console.error('logSlotHistory error:', e.message);
+  }
+}
+
 // Lit les créneaux Google occupés depuis le cache (chargé par googleSync.js toutes les 2 min)
 async function getGoogleBusySlots(monitorName, webhookUrl) {
   const monRes = await pool.query(
@@ -152,6 +173,8 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
     if (req.user.role === 'admin' && (title === 'NON DISPO' || title === '☕ PAUSE')) {
       title = `${title} (Admin)`;
     }
+
+    await logSlotHistory(slotId, 'update', req.user.email);
 
     const result = await pool.query(
       `UPDATE slots
@@ -617,6 +640,8 @@ router.delete('/api/slots/:id', authenticateUser, async (req, res) => {
       }
     }
 
+    await logSlotHistory(req.params.id, 'delete', req.user?.email);
+
     // Le nettoyage du créneau
     await pool.query(
       `UPDATE slots SET status = 'available', payment_data = NULL, title = NULL, notes = NULL, phone = NULL, email = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight_checked = false, weight = NULL, second_booking = NULL WHERE id = $1`, [req.params.id]
@@ -625,5 +650,25 @@ router.delete('/api/slots/:id', authenticateUser, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
+
+// Historique des modifications d'un créneau
+router.get('/api/slots/:id/history', authenticateUser, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, action, changed_by_email,
+              TO_CHAR(changed_at AT TIME ZONE 'Europe/Paris', 'YYYY-MM-DD HH24:MI') AS changed_at,
+              snapshot
+       FROM slot_history
+       WHERE slot_id = $1
+       ORDER BY changed_at DESC
+       LIMIT 20`,
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
 
 module.exports = router;
