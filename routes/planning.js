@@ -12,11 +12,14 @@ const { notifyGoogleCalendar, deleteGoogleCalendarEvent } = require('../services
 async function logSlotHistory(slotId, action, userEmail) {
   try {
     const r = await pool.query(
-      `SELECT id, title, status, phone, email, notes, weight, flight_type_id,
-              second_booking, payment_data, monitor_id,
-              TO_CHAR(start_time AT TIME ZONE 'Europe/Paris', 'YYYY-MM-DD HH24:MI') AS start_time,
-              TO_CHAR(end_time   AT TIME ZONE 'Europe/Paris', 'YYYY-MM-DD HH24:MI') AS end_time
-       FROM slots WHERE id = $1`, [slotId]
+      `SELECT s.id, s.title, s.status, s.phone, s.email, s.notes, s.weight,
+              s.flight_type_id, ft.name AS flight_type_name,
+              s.second_booking, s.payment_data, s.monitor_id,
+              TO_CHAR(s.start_time, 'YYYY-MM-DD HH24:MI') AS start_time,
+              TO_CHAR(s.end_time,   'YYYY-MM-DD HH24:MI') AS end_time
+       FROM slots s
+       LEFT JOIN flight_types ft ON ft.id = s.flight_type_id
+       WHERE s.id = $1`, [slotId]
     );
     if (r.rows.length === 0) return;
     await pool.query(
