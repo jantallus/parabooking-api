@@ -209,6 +209,10 @@ const migrations = [
       );
     `
   },
+  {
+    name: '027_standby_soft_delete',
+    sql: `ALTER TABLE standby_clients ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL;`
+  },
 ];
 
 async function runMigrations() {

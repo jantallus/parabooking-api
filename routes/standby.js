@@ -22,6 +22,7 @@ router.get('/api/standby', authenticateAdminOrPartner, async (req, res) => {
        FROM standby_clients sc
        LEFT JOIN slots s ON sc.slot_id = s.id
        LEFT JOIN users u ON s.monitor_id::text = u.id::text
+       WHERE sc.deleted_at IS NULL
        ORDER BY
          CASE sc.status WHEN 'done' THEN 2 WHEN 'scheduled' THEN 1 ELSE 0 END,
          CASE WHEN sc.availability_start IS NOT NULL THEN sc.availability_start ELSE sc.created_at::date END ASC,
@@ -142,7 +143,34 @@ router.patch('/api/standby/:id', authenticateAdminOrPartner, async (req, res) =>
 
 router.delete('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
   try {
-    await pool.query('DELETE FROM standby_clients WHERE id=$1', [req.params.id]);
+    await pool.query('UPDATE standby_clients SET deleted_at = NOW() WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
+router.get('/api/standby/trash', authenticateAdminOrPartner, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM standby_clients WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`
+    );
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
+router.patch('/api/standby/:id/restore', authenticateAdminOrPartner, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'UPDATE standby_clients SET deleted_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING *',
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Introuvable' });
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
+router.delete('/api/standby/:id/purge', authenticateAdminOrPartner, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM standby_clients WHERE id = $1 AND deleted_at IS NOT NULL', [req.params.id]);
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
