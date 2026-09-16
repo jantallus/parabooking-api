@@ -156,19 +156,34 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
     }
 
     if (req.user.role === 'permanent') {
-      const checkRes = await pool.query('SELECT monitor_id, title, status FROM slots WHERE id = $1', [slotId]);
+      const checkRes = await pool.query('SELECT monitor_id, title, status, payment_data FROM slots WHERE id = $1', [slotId]);
       if (checkRes.rows.length > 0) {
         const slot = checkRes.rows[0];
         if (slot.monitor_id !== req.user.id) {
           return res.status(403).json({ error: "Vous ne pouvez agir que sur votre propre planning." });
         }
-        const isClientSlot = slot.status === 'booked' && slot.title && !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => slot.title.includes(t)) && !slot.title.includes('❌');
-        const isMakingClientSlot = status === 'booked' && title && !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => title.includes(t)) && !title.includes('❌');
-        if (isClientSlot || isMakingClientSlot) {
-          return res.status(403).json({ error: "Les moniteurs permanents ne peuvent pas modifier les réservations clients." });
-        }
         if (slot.title && slot.title.includes('(Admin)')) {
           return res.status(403).json({ error: "Action refusée : Ce créneau est verrouillé par la Direction." });
+        }
+        const isClientSlot = slot.status === 'booked' && slot.title && !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => slot.title.includes(t)) && !slot.title.includes('❌');
+        const isMakingClientSlot = status === 'booked' && title && !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => title.includes(t)) && !title.includes('❌');
+        if (isMakingClientSlot && !isClientSlot) {
+          return res.status(403).json({ error: "Les moniteurs permanents ne peuvent pas créer de réservations clients." });
+        }
+        if (isClientSlot) {
+          // Permanent can only update notes and payment_data (if not already paid) on client slots
+          const existingPd = slot.payment_data || {};
+          const isAlreadyPaid = !!(existingPd.payment_type && existingPd.payment_type !== 'np');
+          const newPd = (!isAlreadyPaid && req.body.payment_data !== undefined)
+            ? JSON.stringify(req.body.payment_data)
+            : null; // COALESCE keeps existing value when null
+          await logSlotHistory(slotId, 'update', req.user.email);
+          const upd = await pool.query(
+            'UPDATE slots SET notes = $1, payment_data = COALESCE($2::jsonb, payment_data) WHERE id = $3 RETURNING *',
+            [notes !== undefined ? notes : null, newPd, slotId]
+          );
+          if (upd.rows.length === 0) return res.status(404).json({ error: "Créneau introuvable" });
+          return res.json(upd.rows[0]);
         }
       }
     }
