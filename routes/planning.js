@@ -66,7 +66,7 @@ router.get('/api/slots', authenticateUser, async (req, res) => {
     let query = 'SELECT * FROM slots WHERE 1=1';
     let params = [];
 
-    if (req.user.role === 'monitor') {
+    if (req.user.role === 'monitor' || req.user.role === 'permanent') {
       params.push(req.user.id);
       query += ` AND monitor_id = $${params.length}`;
     }
