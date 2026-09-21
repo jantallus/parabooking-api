@@ -215,7 +215,7 @@ const migrations = [
   },
   {
     name: '028_partners_default_encaisseur',
-    sql: `ALTER TABLE partners ADD COLUMN IF NOT EXISTS default_encaisseur_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`
+    sql: `ALTER TABLE partners ADD COLUMN IF NOT EXISTS default_encaisseur_id UUID REFERENCES users(id) ON DELETE SET NULL;`
   },
 ];
 
