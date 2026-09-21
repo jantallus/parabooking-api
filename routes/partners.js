@@ -33,16 +33,16 @@ async function upsertFlightTypes(client, partnerId, allowedFlightTypes) {
 }
 
 router.post('/api/partners', authenticateAdmin, async (req, res) => {
-  const { name, code, color_code, booking_fields, commission_type, commission_value, facturable, allowed_flight_types } = req.body;
+  const { name, code, color_code, booking_fields, commission_type, commission_value, facturable, default_encaisseur_id, allowed_flight_types } = req.body;
   if (!name?.trim() || !code?.trim()) return res.status(400).json({ error: 'Nom et code requis' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const { rows } = await client.query(
-      `INSERT INTO partners (name, code, color_code, booking_fields, commission_type, commission_value, facturable)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      `INSERT INTO partners (name, code, color_code, booking_fields, commission_type, commission_value, facturable, default_encaisseur_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [name.trim(), code.trim().toUpperCase(), color_code || '#6366f1', JSON.stringify(booking_fields || {}),
-       commission_type || 'none', commission_value ?? 0, facturable ?? true]
+       commission_type || 'none', commission_value ?? 0, facturable ?? true, default_encaisseur_id || null]
     );
     await upsertFlightTypes(client, rows[0].id, allowed_flight_types);
     await client.query('COMMIT');
@@ -55,16 +55,17 @@ router.post('/api/partners', authenticateAdmin, async (req, res) => {
 });
 
 router.put('/api/partners/:id', authenticateAdmin, async (req, res) => {
-  const { name, code, color_code, booking_fields, is_active, commission_type, commission_value, facturable, allowed_flight_types } = req.body;
+  const { name, code, color_code, booking_fields, is_active, commission_type, commission_value, facturable, default_encaisseur_id, allowed_flight_types } = req.body;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const { rows } = await client.query(
       `UPDATE partners SET name=$1, code=$2, color_code=$3, booking_fields=$4, is_active=$5,
-                           commission_type=$6, commission_value=$7, facturable=$8
-       WHERE id=$9 RETURNING *`,
+                           commission_type=$6, commission_value=$7, facturable=$8, default_encaisseur_id=$9
+       WHERE id=$10 RETURNING *`,
       [name.trim(), code.trim().toUpperCase(), color_code || '#6366f1', JSON.stringify(booking_fields || {}),
-       is_active ?? true, commission_type || 'none', commission_value ?? 0, facturable ?? true, req.params.id]
+       is_active ?? true, commission_type || 'none', commission_value ?? 0, facturable ?? true,
+       default_encaisseur_id || null, req.params.id]
     );
     if (!rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Partenaire introuvable' }); }
     await upsertFlightTypes(client, rows[0].id, allowed_flight_types);
