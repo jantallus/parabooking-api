@@ -116,7 +116,7 @@ async function processStripeSession(session) {
         }
       });
 
-      return { success: true, is_gift_card: true, code: finalCode };
+      return { success: true, is_gift_card: true, code: finalCode, amount_total: session.amount_total };
     }
 
     // ── CAS 2 : RÉSERVATION VOL ───────────────────────────────────────────────
@@ -294,7 +294,7 @@ async function processStripeSession(session) {
       }
     });
 
-    return { success: true };
+    return { success: true, amount_total: session.amount_total };
 
   } catch (err) {
     await client.query('ROLLBACK');
