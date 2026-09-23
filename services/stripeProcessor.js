@@ -157,23 +157,6 @@ async function processStripeSession(session) {
         : {}),
     };
 
-    // Récupérer les frais Stripe via la balance_transaction
-    if (session.payment_intent && session.amount_total > 0) {
-      try {
-        const stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY);
-        const pi = await stripeClient.paymentIntents.retrieve(session.payment_intent, {
-          expand: ['latest_charge.balance_transaction'],
-        });
-        const bt = pi.latest_charge?.balance_transaction;
-        if (bt && typeof bt === 'object') {
-          pData.stripe_fee_cents = bt.fee;
-          pData.stripe_net_cents = bt.net;
-        }
-      } catch (e) {
-        console.error('Stripe balance_transaction non disponible:', e.message);
-      }
-    }
-
     // Attribuer l'encaisseur : pilote du bon cadeau ou pilote configuré pour les paiements en ligne
     if (voucherCode && voucherType === 'gift_card') {
       const gcRes = await client.query('SELECT monitor_id FROM gift_cards WHERE UPPER(code) = UPPER($1)', [voucherCode]);
@@ -291,6 +274,27 @@ async function processStripeSession(session) {
         }
       } catch (e) {
         console.error('❌ Erreur notifications Vol:', e);
+      }
+
+      // Récupérer les frais Stripe en arrière-plan (non bloquant pour la réponse client)
+      try {
+        if (session.payment_intent && session.amount_total > 0) {
+          const stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY);
+          const pi = await stripeClient.paymentIntents.retrieve(session.payment_intent, {
+            expand: ['latest_charge.balance_transaction'],
+          });
+          const bt = pi.latest_charge?.balance_transaction;
+          if (bt && typeof bt === 'object') {
+            await pool.query(
+              `UPDATE appointments
+               SET payment_data = payment_data || $1::jsonb
+               WHERE payment_data->>'stripe_session_id' = $2`,
+              [JSON.stringify({ stripe_fee_cents: bt.fee, stripe_net_cents: bt.net }), session_id]
+            );
+          }
+        }
+      } catch (e) {
+        console.error('Stripe balance_transaction non disponible:', e.message);
       }
     });
 
