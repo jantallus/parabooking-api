@@ -135,37 +135,41 @@ router.get('/api/public/available-dates', availabilitiesLimiter, async (req, res
 });
 
 router.get('/api/public/next-available', availabilitiesLimiter, async (req, res) => {
-  const { start } = req.query;
+  const { start, flight_type_id } = req.query;
   if (!start) return res.status(400).json({ error: 'start requis' });
   try {
     const end = new Date(start);
     end.setMonth(end.getMonth() + 6);
     const endStr = end.toISOString().slice(0, 10);
 
-    // Première date avec au moins un créneau disponible,
-    // en tenant compte des périodes de disponibilité moniteur.
-    const r = await pool.query(
-      `SELECT TO_CHAR(MIN(s.start_time::date), 'YYYY-MM-DD') as date
-       FROM slots s
-       WHERE s.status = 'available'
-         AND s.start_time::date >= $1::date
-         AND s.start_time::date <= $2::date
-         AND (
-           -- Moniteur sans restriction : toujours dispo
-           NOT EXISTS (
-             SELECT 1 FROM monitor_availabilities ma WHERE ma.user_id = s.monitor_id
-           )
-           OR
-           -- Moniteur avec restriction : la date doit être dans une période
-           EXISTS (
-             SELECT 1 FROM monitor_availabilities ma
-             WHERE ma.user_id = s.monitor_id
-               AND s.start_time::date >= ma.start_date
-               AND s.start_time::date <= ma.end_date
-           )
-         )`,
-      [start, endStr]
-    );
+    let r;
+    if (flight_type_id) {
+      const ftRes = await pool.query(
+        'SELECT allowed_time_slots FROM flight_types WHERE id = $1',
+        [flight_type_id]
+      );
+      const allowedSlots = ftRes.rows[0]?.allowed_time_slots || [];
+      if (allowedSlots.length === 0) return res.json({ date: null });
+
+      r = await pool.query(
+        `SELECT TO_CHAR(MIN(s.start_time::date), 'YYYY-MM-DD') as date
+         FROM slots s
+         WHERE s.status = 'available'
+           AND s.start_time::date >= $1::date
+           AND s.start_time::date <= $2::date
+           AND TO_CHAR(s.start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') = ANY($3)`,
+        [start, endStr, allowedSlots]
+      );
+    } else {
+      r = await pool.query(
+        `SELECT TO_CHAR(MIN(s.start_time::date), 'YYYY-MM-DD') as date
+         FROM slots s
+         WHERE s.status = 'available'
+           AND s.start_time::date >= $1::date
+           AND s.start_time::date <= $2::date`,
+        [start, endStr]
+      );
+    }
 
     res.json({ date: r.rows[0]?.date ?? null });
   } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }
