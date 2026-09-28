@@ -174,7 +174,12 @@ router.get('/api/public/next-available', availabilitiesLimiter, async (req, res)
 router.get('/api/public/partners/check/:code', availabilitiesLimiter, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, code, color_code, booking_fields FROM partners WHERE UPPER(code) = UPPER($1) AND is_active = true`,
+      `SELECT p.id, p.name, p.code, p.color_code, p.booking_fields,
+              COALESCE(json_agg(json_build_object('flight_type_id', pft.flight_type_id, 'base_price_cents', pft.base_price_cents)) FILTER (WHERE pft.flight_type_id IS NOT NULL), '[]') AS allowed_flight_types
+       FROM partners p
+       LEFT JOIN partner_flight_types pft ON p.id = pft.partner_id
+       WHERE UPPER(p.code) = UPPER($1) AND p.is_active = true
+       GROUP BY p.id`,
       [req.params.code]
     );
     if (!rows.length) return res.status(404).json({ message: 'Code partenaire inconnu ou inactif.' });
