@@ -224,16 +224,19 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
       cl1 = tpl.custom_line_1 || ''; cl2 = tpl.custom_line_2 || ''; cl3 = tpl.custom_line_3 || '';
     } else if (flight_type_id) {
       const ftRes = await pool.query(
-        'SELECT id, name, price_cents FROM flight_types WHERE id = $1 AND is_active = true',
+        'SELECT id, name, price_cents, is_giftable, gift_pdf_background_url, gift_custom_line_1, gift_custom_line_2, gift_custom_line_3, gift_validity_months FROM flight_types WHERE id = $1 AND is_active = true AND is_giftable = true',
         [flight_type_id]
       );
       const ft = ftRes.rows[0];
-      if (!ft) return res.status(400).json({ error: 'Vol introuvable ou inactif.' });
+      if (!ft) return res.status(400).json({ error: 'Vol introuvable, inactif ou non disponible en bon cadeau.' });
       productName    = `Bon cadeau ${ft.name}`;
       priceCents     = ft.price_cents;
       flightTypeId   = ft.id;
-      validityMonths = 12;
-      pdfBg = ''; cl1 = ''; cl2 = ''; cl3 = '';
+      validityMonths = ft.gift_validity_months || 12;
+      pdfBg = ft.gift_pdf_background_url || '';
+      cl1 = ft.gift_custom_line_1 || ft.name;
+      cl2 = ft.gift_custom_line_2 || `Valeur : ${ft.price_cents / 100}€`;
+      cl3 = ft.gift_custom_line_3 || '';
     } else {
       return res.status(400).json({ error: 'Template ou vol requis.' });
     }

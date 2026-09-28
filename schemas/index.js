@@ -139,6 +139,12 @@ const FlightTypeSchema = z.object({
   media_included:         z.boolean().optional().default(false),
   passengers_per_slot:    z.number().int().min(1).max(20).optional().default(1),
   tenant:                 z.enum(['fluide', 'aravis']).optional(),
+  is_giftable:            z.boolean().optional().default(false),
+  gift_pdf_background_url: z.string().url().max(500).optional().nullable().or(z.literal('')),
+  gift_custom_line_1:     z.string().max(80).optional().nullable(),
+  gift_custom_line_2:     z.string().max(80).optional().nullable(),
+  gift_custom_line_3:     z.string().max(80).optional().nullable(),
+  gift_validity_months:   z.number().int().min(1).max(60).optional().default(12),
 });
 
 
