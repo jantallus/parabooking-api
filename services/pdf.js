@@ -63,9 +63,8 @@ async function generatePDFBuffer(voucher) {
       doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_3).toUpperCase(), 30, textY + 30, { width: 535, align: 'center' });
     }
 
-    // Date de validité (Parfaitement centrée sous le code)
-    const dateV = new Date();
-    dateV.setMonth(dateV.getMonth() + 18);
+    // Date de validité — depuis valid_until si disponible, sinon +18 mois par défaut
+    const dateV = voucher.valid_until ? new Date(voucher.valid_until) : (() => { const d = new Date(); d.setMonth(d.getMonth() + 18); return d; })();
     const validUntil = dateV.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
     const dateY = codeY + 14 + (13 * 2.834);
     doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 0, dateY, { align: 'center', width: 595 });

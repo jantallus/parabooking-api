@@ -97,6 +97,7 @@ async function processStripeSession(session) {
             custom_line_1: session.metadata.custom_line_1,
             custom_line_2: session.metadata.custom_line_2,
             custom_line_3: session.metadata.custom_line_3,
+            valid_until: validUntil,
           });
           const flightLabel = isSpecific
             ? 'Vol en parapente'
