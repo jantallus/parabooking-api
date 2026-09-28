@@ -51,7 +51,8 @@ const CheckoutSchema = z.object({
 const CheckoutGiftCardSchema = z.object({
   template: z.object({
     id: z.number().int().positive(),
-  }),
+  }).optional(),
+  flight_type_id: z.number().int().positive().optional(),
   buyer: z.object({
     name:  zName,
     email: zEmail,
@@ -60,11 +61,11 @@ const CheckoutGiftCardSchema = z.object({
   physicalShipping: z.object({
     enabled: z.boolean(),
     address: z.string().max(500).optional(),
-  }).nullish(), // le frontend envoie null quand la livraison physique n'est pas souhaitée
+  }).nullish(),
   selectedComplements: z.array(z.object({
     id: z.number().int().positive(),
   })).max(10).optional(),
-});
+}).refine(d => d.template?.id || d.flight_type_id, { message: 'Template ou vol requis.' });
 
 
 // ── ADMIN : Utilisateurs ──────────────────────────────────────────────────────

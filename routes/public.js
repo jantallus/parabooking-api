@@ -199,41 +199,57 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 /// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
 router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(CheckoutGiftCardSchema), async (req, res) => {
-  const { template, buyer, physicalShipping, selectedComplements } = req.body;
+  const { template, flight_type_id, buyer, physicalShipping, selectedComplements } = req.body;
   try {
-    // ── Validation des champs obligatoires ────────────────────────────────────
-    const templateId = template?.id;
-    if (!templateId) return res.status(400).json({ error: 'Template ID manquant.' });
     if (!buyer || !buyer.name || !buyer.email) {
       return res.status(400).json({ error: 'Informations acheteur incomplètes (nom et email requis).' });
     }
-    if (Array.isArray(selectedComplements) && selectedComplements.length > 10) {
-      return res.status(400).json({ error: 'Maximum 10 options par bon cadeau.' });
-    }
 
-    // ── Vérification du template en base (prix + statut publié) ───────────────
+    // ── Résolution du prix et des métadonnées depuis la DB ────────────────────
     // 🛡️ On ne fait jamais confiance aux prix envoyés par le client.
-    const tplRes = await pool.query(
-      'SELECT * FROM gift_card_templates WHERE id = $1 AND is_published = true',
-      [templateId]
-    );
-    const tpl = tplRes.rows[0];
-    if (!tpl) return res.status(400).json({ error: 'Modèle de bon cadeau introuvable ou non publié.' });
+    let productName, priceCents, flightTypeId, validityMonths, pdfBg, cl1, cl2, cl3;
+
+    if (template?.id) {
+      const tplRes = await pool.query(
+        'SELECT * FROM gift_card_templates WHERE id = $1 AND is_published = true',
+        [template.id]
+      );
+      const tpl = tplRes.rows[0];
+      if (!tpl) return res.status(400).json({ error: 'Modèle de bon cadeau introuvable ou non publié.' });
+      productName    = tpl.title;
+      priceCents     = tpl.price_cents;
+      flightTypeId   = tpl.flight_type_id || '';
+      validityMonths = tpl.validity_months || 12;
+      pdfBg          = tpl.pdf_background_url || '';
+      cl1 = tpl.custom_line_1 || ''; cl2 = tpl.custom_line_2 || ''; cl3 = tpl.custom_line_3 || '';
+    } else if (flight_type_id) {
+      const ftRes = await pool.query(
+        'SELECT id, name, price_cents FROM flight_types WHERE id = $1 AND is_active = true',
+        [flight_type_id]
+      );
+      const ft = ftRes.rows[0];
+      if (!ft) return res.status(400).json({ error: 'Vol introuvable ou inactif.' });
+      productName    = `Bon cadeau ${ft.name}`;
+      priceCents     = ft.price_cents;
+      flightTypeId   = ft.id;
+      validityMonths = 12;
+      pdfBg = ''; cl1 = ''; cl2 = ''; cl3 = '';
+    } else {
+      return res.status(400).json({ error: 'Template ou vol requis.' });
+    }
 
     const shipRes = await pool.query("SELECT value FROM site_settings WHERE key = 'physical_gift_card_price'");
     const shipPriceCents = shipRes.rows.length > 0 ? (parseInt(shipRes.rows[0].value) || 0) * 100 : 0;
 
-    // Prix du bon cadeau — lu depuis la DB, pas depuis le client
     const line_items = [{
       price_data: {
         currency: 'eur',
-        product_data: { name: tpl.title, description: `Bon cadeau offert par : ${buyer.name}` },
-        unit_amount: tpl.price_cents
+        product_data: { name: productName, description: `Bon cadeau offert par : ${buyer.name}` },
+        unit_amount: priceCents
       },
       quantity: 1
     }];
 
-    // Options (compléments) — seuls les IDs sont acceptés du client, prix relus en DB
     let optionsTotalCents = 0;
     let optionsText = '';
     if (Array.isArray(selectedComplements) && selectedComplements.length > 0) {
@@ -246,7 +262,6 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
         );
         const dbComp = compRes.rows[0];
         if (!dbComp) return res.status(400).json({ error: `Option introuvable ou désactivée (id: ${comp.id})` });
-
         optionsTotalCents += dbComp.price_cents;
         names.push(dbComp.name);
         line_items.push({
@@ -261,7 +276,6 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
       optionsText = `Options incluses : ${names.join(', ')}\n`;
     }
 
-    // Envoi postal — prix lu en DB, adresse validée
     const shippingAddress = physicalShipping?.enabled && physicalShipping?.address
       ? String(physicalShipping.address).substring(0, 499)
       : '';
@@ -279,7 +293,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
       });
     }
 
-    const sessionConfig = {
+    const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       customer_email: buyer.email,
       line_items,
@@ -291,19 +305,18 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
         buyer_name: String(buyer.name).substring(0, 499),
         buyer_email: String(buyer.email).substring(0, 499),
         buyer_phone: String(buyer.phone || '').substring(0, 499),
-        price_paid_cents: String(tpl.price_cents + optionsTotalCents),
-        validity_months: String(tpl.validity_months || 12),
-        flight_type_id: String(tpl.flight_type_id || ''),
-        pdf_background_url: String(tpl.pdf_background_url || '').substring(0, 499),
+        price_paid_cents: String(priceCents + optionsTotalCents),
+        validity_months: String(validityMonths),
+        flight_type_id: String(flightTypeId),
+        pdf_background_url: String(pdfBg).substring(0, 499),
         buyer_address: shippingAddress,
         notes: String(optionsText).substring(0, 499),
-        custom_line_1: String(tpl.custom_line_1 || '').substring(0, 80),
-        custom_line_2: String(tpl.custom_line_2 || '').substring(0, 80),
-        custom_line_3: String(tpl.custom_line_3 || '').substring(0, 80)
+        custom_line_1: String(cl1).substring(0, 80),
+        custom_line_2: String(cl2).substring(0, 80),
+        custom_line_3: String(cl3).substring(0, 80)
       }
-    };
+    });
 
-    const session = await stripe.checkout.sessions.create(sessionConfig);
     res.json({ url: session.url });
   } catch (err) {
     console.error("Erreur Checkout Stripe Cadeau:", err);
