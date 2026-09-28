@@ -157,7 +157,7 @@ router.get('/api/public/next-available', availabilitiesLimiter, async (req, res)
          WHERE s.status = 'available'
            AND s.start_time::date >= $1::date
            AND s.start_time::date <= $2::date
-           AND TO_CHAR(s.start_time AT TIME ZONE 'Europe/Paris', 'HH24:MI') = ANY($3)`,
+           AND TO_CHAR(s.start_time, 'HH24:MI') = ANY($3)`,
         [start, endStr, allowedSlots]
       );
     } else {
