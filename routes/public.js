@@ -803,4 +803,90 @@ router.post('/api/public/aravis/request', aravisRequestLimiter, async (req, res)
   }
 });
 
+// ── Types de vol Fluide (public, pour le formulaire de demande) ───────────────
+
+router.get('/api/public/fluide/flight-types', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, price_cents, duration_minutes, season
+       FROM flight_types
+       WHERE is_active = true AND (tenant = 'fluide' OR tenant IS NULL)
+       ORDER BY price_cents ASC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[Fluide flight-types public]', err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ── Demande de vol Fluide (endpoint public, sans authentification) ─────────────
+
+const fluideRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Trop de demandes. Veuillez réessayer dans 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.post('/api/public/fluide/request', fluideRequestLimiter, async (req, res) => {
+  const { name, phone, email, nb_passengers, weight_info, flight_type, availability_start, availability_end, notes } = req.body;
+
+  if (!name && !phone && !email) {
+    return res.status(400).json({ error: 'Au moins un contact (nom, téléphone ou email) est requis.' });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO standby_clients
+        (name, phone, email, nb_passengers, flight_type, weight_info,
+         availability_start, availability_end, notes, status, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending','fluide-web') RETURNING id`,
+      [
+        name || null,
+        phone || null,
+        email || null,
+        nb_passengers || 1,
+        flight_type || null,
+        weight_info || null,
+        availability_start || null,
+        availability_end || null,
+        notes || null,
+      ]
+    );
+
+    // SMS aux admins ayant activé les notifications de demande
+    if (process.env.BREVO_API_KEY) {
+      try {
+        const { rows: admins } = await pool.query(
+          `SELECT phone, first_name, request_notification_sms FROM users WHERE notify_on_request = true AND phone IS NOT NULL`
+        );
+        for (const admin of admins) {
+          const defaultMsg = `Nouvelle demande Fluide (web) : ${name || 'anonyme'}${phone ? ` (${phone})` : ''}${flight_type ? ` — ${flight_type}` : ''}${availability_start ? ` du ${availability_start}` : ''}${availability_end && availability_end !== availability_start ? ` au ${availability_end}` : ''}.`;
+          const message = (admin.request_notification_sms || defaultMsg)
+            .replace(/\[NOM\]/g, name || '')
+            .replace(/\[TELE\]/g, phone || '')
+            .replace(/\[VOL\]/g, flight_type || '')
+            .replace(/\[DATE\]/g, availability_start || '');
+          let adminPhone = admin.phone.replace(/\s+/g, '');
+          if (adminPhone.startsWith('0')) adminPhone = '+33' + adminPhone.substring(1);
+          await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
+            method: 'POST',
+            headers: { 'accept': 'application/json', 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json' },
+            body: JSON.stringify({ type: 'transactional', sender: 'FLUIDE', recipient: adminPhone, content: message })
+          });
+        }
+      } catch (smsErr) {
+        console.error('[Fluide request SMS]', smsErr);
+      }
+    }
+
+    res.json({ success: true, id: rows[0].id });
+  } catch (err) {
+    console.error('[Fluide request]', err);
+    res.status(500).json({ error: 'Erreur serveur. Votre demande n\'a pas pu être enregistrée.' });
+  }
+});
+
 module.exports = router;
