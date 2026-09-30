@@ -203,7 +203,8 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 /// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
 router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(CheckoutGiftCardSchema), async (req, res) => {
-  const { template, flight_type_id, buyer, physicalShipping, selectedComplements } = req.body;
+  const { template, flight_type_id, buyer, physicalShipping, selectedComplements, quantity: rawQuantity } = req.body;
+  const qty = (Number.isInteger(rawQuantity) && rawQuantity >= 1 && rawQuantity <= 10) ? rawQuantity : 1;
   try {
     if (!buyer || !buyer.name || !buyer.email) {
       return res.status(400).json({ error: 'Informations acheteur incomplètes (nom et email requis).' });
@@ -254,7 +255,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
         product_data: { name: productName, description: `Bon cadeau offert par : ${buyer.name}` },
         unit_amount: priceCents
       },
-      quantity: 1
+      quantity: qty
     }];
 
     let optionsTotalCents = 0;
@@ -312,7 +313,8 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
         buyer_name: String(buyer.name).substring(0, 499),
         buyer_email: String(buyer.email).substring(0, 499),
         buyer_phone: String(buyer.phone || '').substring(0, 499),
-        price_paid_cents: String(priceCents + optionsTotalCents),
+        quantity: String(qty),
+        price_paid_cents: String(priceCents * qty + optionsTotalCents),
         validity_months: String(validityMonths),
         flight_type_id: String(flightTypeId),
         pdf_background_url: String(pdfBg).substring(0, 499),
