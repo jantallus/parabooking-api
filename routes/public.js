@@ -270,15 +270,16 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
         );
         const dbComp = compRes.rows[0];
         if (!dbComp) return res.status(400).json({ error: `Option introuvable ou désactivée (id: ${comp.id})` });
-        optionsTotalCents += dbComp.price_cents;
-        names.push(dbComp.name);
+        const compQty = (Number.isInteger(comp.quantity) && comp.quantity >= 1 && comp.quantity <= 10) ? comp.quantity : qty;
+        optionsTotalCents += dbComp.price_cents * compQty;
+        names.push(compQty > 1 ? `${dbComp.name} ×${compQty}` : dbComp.name);
         line_items.push({
           price_data: {
             currency: 'eur',
             product_data: { name: `Option incluse : ${dbComp.name}` },
             unit_amount: dbComp.price_cents
           },
-          quantity: qty
+          quantity: compQty
         });
       }
       optionsText = `Options incluses : ${names.join(', ')}\n`;
@@ -314,7 +315,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
         buyer_email: String(buyer.email).substring(0, 499),
         buyer_phone: String(buyer.phone || '').substring(0, 499),
         quantity: String(qty),
-        price_paid_cents: String(priceCents + optionsTotalCents),
+        price_paid_cents: String(priceCents),
         validity_months: String(validityMonths),
         flight_type_id: String(flightTypeId),
         pdf_background_url: String(pdfBg).substring(0, 499),

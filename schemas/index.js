@@ -64,6 +64,7 @@ const CheckoutGiftCardSchema = z.object({
   }).nullish(),
   selectedComplements: z.array(z.object({
     id: z.number().int().positive(),
+    quantity: z.number().int().min(1).max(10).optional(),
   })).max(10).optional(),
   quantity: z.number().int().min(1).max(10).optional(),
 }).refine(d => d.template?.id || d.flight_type_id, { message: 'Template ou vol requis.' });
