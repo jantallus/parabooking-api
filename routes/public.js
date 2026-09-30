@@ -297,7 +297,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
           product_data: { name: "📮 Envoi Postal", description: "Carte glacée imprimée envoyée par courrier" },
           unit_amount: shipPriceCents
         },
-        quantity: qty
+        quantity: 1
       });
     }
 
