@@ -278,7 +278,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
             product_data: { name: `Option incluse : ${dbComp.name}` },
             unit_amount: dbComp.price_cents
           },
-          quantity: 1
+          quantity: qty
         });
       }
       optionsText = `Options incluses : ${names.join(', ')}\n`;
@@ -297,7 +297,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
           product_data: { name: "📮 Envoi Postal", description: "Carte glacée imprimée envoyée par courrier" },
           unit_amount: shipPriceCents
         },
-        quantity: 1
+        quantity: qty
       });
     }
 
@@ -314,7 +314,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
         buyer_email: String(buyer.email).substring(0, 499),
         buyer_phone: String(buyer.phone || '').substring(0, 499),
         quantity: String(qty),
-        price_paid_cents: String(priceCents * qty + optionsTotalCents),
+        price_paid_cents: String(priceCents + optionsTotalCents),
         validity_months: String(validityMonths),
         flight_type_id: String(flightTypeId),
         pdf_background_url: String(pdfBg).substring(0, 499),
