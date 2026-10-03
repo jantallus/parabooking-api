@@ -139,7 +139,7 @@ router.get('/api/public/next-available', availabilitiesLimiter, async (req, res)
   if (!start) return res.status(400).json({ error: 'start requis' });
   try {
     const end = new Date(start);
-    end.setMonth(end.getMonth() + 6);
+    end.setMonth(end.getMonth() + 12);
     const endStr = end.toISOString().slice(0, 10);
 
     let r;
