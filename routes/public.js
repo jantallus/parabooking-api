@@ -254,17 +254,31 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
       const resolvedItems = [];
       for (const item of items) {
         const itemQty = (Number.isInteger(item.quantity) && item.quantity >= 1 && item.quantity <= 10) ? item.quantity : 1;
-        const tplRes = await pool.query(
-          'SELECT * FROM gift_card_templates WHERE id = $1 AND is_published = true',
-          [item.template_id]
-        );
-        const tpl = tplRes.rows[0];
-        if (!tpl) return res.status(400).json({ error: `Modèle ${item.template_id} introuvable ou non publié.` });
-        resolvedItems.push({ id: tpl.id, qty: itemQty });
-        line_items.unshift({
-          price_data: { currency: 'eur', product_data: { name: tpl.title, description: `Bon cadeau offert par : ${buyer.name}` }, unit_amount: tpl.price_cents },
-          quantity: itemQty
-        });
+        if (item.template_id) {
+          const tplRes = await pool.query(
+            'SELECT * FROM gift_card_templates WHERE id = $1 AND is_published = true',
+            [item.template_id]
+          );
+          const tpl = tplRes.rows[0];
+          if (!tpl) return res.status(400).json({ error: `Modèle ${item.template_id} introuvable ou non publié.` });
+          resolvedItems.push({ type: 'template', id: tpl.id, qty: itemQty });
+          line_items.unshift({
+            price_data: { currency: 'eur', product_data: { name: tpl.title, description: `Bon cadeau offert par : ${buyer.name}` }, unit_amount: tpl.price_cents },
+            quantity: itemQty
+          });
+        } else if (item.flight_type_id) {
+          const ftRes = await pool.query(
+            'SELECT id, name, price_cents, is_giftable FROM flight_types WHERE id = $1 AND is_active = true AND is_giftable = true',
+            [item.flight_type_id]
+          );
+          const ft = ftRes.rows[0];
+          if (!ft) return res.status(400).json({ error: `Vol ${item.flight_type_id} introuvable ou non disponible en bon cadeau.` });
+          resolvedItems.push({ type: 'flight', id: ft.id, qty: itemQty });
+          line_items.unshift({
+            price_data: { currency: 'eur', product_data: { name: `Bon cadeau ${ft.name}`, description: `Offert par : ${buyer.name}` }, unit_amount: ft.price_cents },
+            quantity: itemQty
+          });
+        }
       }
 
       const itemsJson = JSON.stringify(resolvedItems);

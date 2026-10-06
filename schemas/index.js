@@ -54,9 +54,10 @@ const CheckoutGiftCardSchema = z.object({
   }).optional(),
   flight_type_id: z.number().int().positive().optional(),
   items: z.array(z.object({
-    template_id: z.number().int().positive(),
+    template_id: z.number().int().positive().optional(),
+    flight_type_id: z.number().int().positive().optional(),
     quantity: z.number().int().min(1).max(10).default(1),
-  })).min(1).max(10).optional(),
+  }).refine(d => d.template_id || d.flight_type_id, { message: 'template_id ou flight_type_id requis par item.' })).min(1).max(10).optional(),
   buyer: z.object({
     name:  zName,
     email: zEmail,

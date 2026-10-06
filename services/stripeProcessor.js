@@ -50,12 +50,31 @@ async function processStripeSession(session) {
       const createdCards = [];
 
       for (const item of cartItems) {
-        const tplRes = await client.query(
-          'SELECT * FROM gift_card_templates WHERE id = $1',
-          [item.id]
-        );
-        const tpl = tplRes.rows[0];
-        if (!tpl) continue;
+        let tpl;
+        if (item.type === 'flight') {
+          const ftRes = await client.query(
+            'SELECT id, name, price_cents, gift_pdf_background_url, gift_custom_line_1, gift_custom_line_2, gift_custom_line_3, gift_validity_months FROM flight_types WHERE id = $1',
+            [item.id]
+          );
+          const ft = ftRes.rows[0];
+          if (!ft) continue;
+          tpl = {
+            flight_type_id: ft.id,
+            price_cents: ft.price_cents,
+            validity_months: ft.gift_validity_months || 12,
+            pdf_background_url: ft.gift_pdf_background_url || null,
+            custom_line_1: ft.gift_custom_line_1 || ft.name,
+            custom_line_2: ft.gift_custom_line_2 || `Valeur : ${ft.price_cents / 100}€`,
+            custom_line_3: ft.gift_custom_line_3 || null,
+          };
+        } else {
+          const tplRes = await client.query(
+            'SELECT * FROM gift_card_templates WHERE id = $1',
+            [item.id]
+          );
+          tpl = tplRes.rows[0];
+          if (!tpl) continue;
+        }
 
         for (let i = 0; i < item.qty; i++) {
           const code = `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
