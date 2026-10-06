@@ -38,7 +38,100 @@ async function processStripeSession(session) {
       return null;
     }
 
-    // ── CAS 1 : ACHAT BON CADEAU ──────────────────────────────────────────────
+    // ── CAS 1 : PANIER MULTI-TEMPLATES ───────────────────────────────────────
+    if (session.metadata.purchase_type === 'gift_cart') {
+      let itemsJson = '';
+      let chunkIdx = 0;
+      while (session.metadata[`items_chunk_${chunkIdx}`] !== undefined) {
+        itemsJson += session.metadata[`items_chunk_${chunkIdx}`];
+        chunkIdx++;
+      }
+      const cartItems = JSON.parse(itemsJson);
+      const createdCards = [];
+
+      for (const item of cartItems) {
+        const tplRes = await client.query(
+          'SELECT * FROM gift_card_templates WHERE id = $1',
+          [item.id]
+        );
+        const tpl = tplRes.rows[0];
+        if (!tpl) continue;
+
+        for (let i = 0; i < item.qty; i++) {
+          const code = `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+          const validUntil = new Date();
+          validUntil.setMonth(validUntil.getMonth() + (tpl.validity_months || 12));
+          let notes = session.metadata.notes || '';
+          if (session.metadata.buyer_address) {
+            notes = `📮 À POSTER : ${session.metadata.buyer_address}\n` + notes;
+          }
+          await client.query(
+            `INSERT INTO gift_cards
+               (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name,
+                price_paid_cents, type, status, discount_scope, valid_until,
+                notes, pdf_background_url, buyer_address,
+                custom_line_1, custom_line_2, custom_line_3)
+             VALUES ($1,$2,$3,$4,'',$5,'gift_card','valid','both',$6,$7,$8,$9,$10,$11,$12)`,
+            [
+              code,
+              tpl.flight_type_id || null,
+              session.metadata.buyer_name || 'Client Inconnu',
+              session.metadata.buyer_phone || null,
+              tpl.price_cents,
+              validUntil, notes,
+              tpl.pdf_background_url || null,
+              session.metadata.buyer_address || null,
+              tpl.custom_line_1 || null,
+              tpl.custom_line_2 || null,
+              tpl.custom_line_3 || null,
+            ]
+          );
+          createdCards.push({ code, tpl, validUntil });
+        }
+      }
+
+      const firstCode = createdCards[0]?.code || 'MULTI';
+      await client.query(
+        'INSERT INTO stripe_payments (session_id, type, result_code) VALUES ($1, $2, $3)',
+        [session_id, 'gift_cart', firstCode]
+      );
+      await client.query('COMMIT');
+      console.log(`✅ Panier bons cadeaux créé : ${createdCards.length} bons (session ${session_id})`);
+
+      setImmediate(async () => {
+        try {
+          for (const { code, tpl, validUntil } of createdCards) {
+            const pdfBuf = await generatePDFBuffer({
+              code,
+              buyer_name: session.metadata.buyer_name,
+              price_paid_cents: String(tpl.price_cents),
+              flight_name: tpl.flight_type_id ? 'Vol en parapente' : null,
+              pdf_background_url: tpl.pdf_background_url,
+              custom_line_1: tpl.custom_line_1,
+              custom_line_2: tpl.custom_line_2,
+              custom_line_3: tpl.custom_line_3,
+              valid_until: validUntil,
+            });
+            const flightLabel = tpl.flight_type_id
+              ? 'Vol en parapente'
+              : `Avoir de ${tpl.price_cents / 100}€`;
+            await sendConfirmationEmail(
+              session.metadata.buyer_email,
+              session.metadata.buyer_name,
+              'gift_card',
+              flightLabel,
+              code, '', null, pdfBuf
+            );
+          }
+        } catch (e) {
+          console.error('❌ Erreur notifications Panier Bons Cadeaux:', e);
+        }
+      });
+
+      return { success: true, is_gift_card: true, code: firstCode, amount_total: session.amount_total };
+    }
+
+    // ── CAS 2 : ACHAT BON CADEAU ──────────────────────────────────────────────
     if (session.metadata.purchase_type === 'gift_card') {
       const finalCode = `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
 

@@ -53,6 +53,10 @@ const CheckoutGiftCardSchema = z.object({
     id: z.number().int().positive(),
   }).optional(),
   flight_type_id: z.number().int().positive().optional(),
+  items: z.array(z.object({
+    template_id: z.number().int().positive(),
+    quantity: z.number().int().min(1).max(10).default(1),
+  })).min(1).max(10).optional(),
   buyer: z.object({
     name:  zName,
     email: zEmail,
@@ -67,7 +71,7 @@ const CheckoutGiftCardSchema = z.object({
     quantity: z.number().int().min(1).max(10).optional(),
   })).max(10).optional(),
   quantity: z.number().int().min(1).max(10).optional(),
-}).refine(d => d.template?.id || d.flight_type_id, { message: 'Template ou vol requis.' });
+}).refine(d => d.template?.id || d.flight_type_id || (d.items && d.items.length > 0), { message: 'Template, vol ou panier requis.' });
 
 
 // ── ADMIN : Utilisateurs ──────────────────────────────────────────────────────

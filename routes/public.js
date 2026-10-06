@@ -203,15 +203,97 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 /// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
 router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(CheckoutGiftCardSchema), async (req, res) => {
-  const { template, flight_type_id, buyer, physicalShipping, selectedComplements, quantity: rawQuantity } = req.body;
+  const { template, flight_type_id, items, buyer, physicalShipping, selectedComplements, quantity: rawQuantity } = req.body;
   const qty = (Number.isInteger(rawQuantity) && rawQuantity >= 1 && rawQuantity <= 10) ? rawQuantity : 1;
   try {
     if (!buyer || !buyer.name || !buyer.email) {
       return res.status(400).json({ error: 'Informations acheteur incomplètes (nom et email requis).' });
     }
 
-    // ── Résolution du prix et des métadonnées depuis la DB ────────────────────
-    // 🛡️ On ne fait jamais confiance aux prix envoyés par le client.
+    const shipRes = await pool.query("SELECT value FROM site_settings WHERE key = 'physical_gift_card_price'");
+    const shipPriceCents = shipRes.rows.length > 0 ? (parseInt(shipRes.rows[0].value) || 0) * 100 : 0;
+
+    const shippingAddress = physicalShipping?.enabled && physicalShipping?.address
+      ? String(physicalShipping.address).substring(0, 499)
+      : '';
+    if (physicalShipping?.enabled && !shippingAddress) {
+      return res.status(400).json({ error: 'Adresse postale manquante.' });
+    }
+
+    // ── Complements (communs aux deux flux) ───────────────────────────────────
+    const line_items = [];
+    let optionsText = '';
+    if (Array.isArray(selectedComplements) && selectedComplements.length > 0) {
+      const names = [];
+      for (const comp of selectedComplements) {
+        if (!comp?.id) return res.status(400).json({ error: 'ID option invalide.' });
+        const compRes = await pool.query(
+          'SELECT name, price_cents FROM complements WHERE id = $1 AND is_active = true',
+          [comp.id]
+        );
+        const dbComp = compRes.rows[0];
+        if (!dbComp) return res.status(400).json({ error: `Option introuvable ou désactivée (id: ${comp.id})` });
+        const compQty = (Number.isInteger(comp.quantity) && comp.quantity >= 1 && comp.quantity <= 10) ? comp.quantity : qty;
+        names.push(compQty > 1 ? `${dbComp.name} ×${compQty}` : dbComp.name);
+        line_items.push({
+          price_data: { currency: 'eur', product_data: { name: `Option incluse : ${dbComp.name}` }, unit_amount: dbComp.price_cents },
+          quantity: compQty
+        });
+      }
+      optionsText = `Options incluses : ${names.join(', ')}\n`;
+    }
+    if (physicalShipping?.enabled && shipPriceCents > 0) {
+      line_items.push({
+        price_data: { currency: 'eur', product_data: { name: "📮 Envoi Postal", description: "Carte glacée imprimée envoyée par courrier" }, unit_amount: shipPriceCents },
+        quantity: 1
+      });
+    }
+
+    // ── CAS A : Panier multi-templates ────────────────────────────────────────
+    if (Array.isArray(items) && items.length > 0) {
+      const resolvedItems = [];
+      for (const item of items) {
+        const itemQty = (Number.isInteger(item.quantity) && item.quantity >= 1 && item.quantity <= 10) ? item.quantity : 1;
+        const tplRes = await pool.query(
+          'SELECT * FROM gift_card_templates WHERE id = $1 AND is_published = true',
+          [item.template_id]
+        );
+        const tpl = tplRes.rows[0];
+        if (!tpl) return res.status(400).json({ error: `Modèle ${item.template_id} introuvable ou non publié.` });
+        resolvedItems.push({ id: tpl.id, qty: itemQty });
+        line_items.unshift({
+          price_data: { currency: 'eur', product_data: { name: tpl.title, description: `Bon cadeau offert par : ${buyer.name}` }, unit_amount: tpl.price_cents },
+          quantity: itemQty
+        });
+      }
+
+      const itemsJson = JSON.stringify(resolvedItems);
+      const chunkSize = 490;
+      const metadata = {
+        purchase_type: 'gift_cart',
+        buyer_name: String(buyer.name).substring(0, 499),
+        buyer_email: String(buyer.email).substring(0, 499),
+        buyer_phone: String(buyer.phone || '').substring(0, 499),
+        buyer_address: shippingAddress,
+        notes: String(optionsText).substring(0, 499),
+      };
+      for (let i = 0; i < itemsJson.length; i += chunkSize) {
+        metadata[`items_chunk_${Math.floor(i / chunkSize)}`] = itemsJson.substring(i, i + chunkSize);
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        customer_email: buyer.email,
+        line_items,
+        mode: 'payment',
+        success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bons-cadeaux`,
+        metadata,
+      });
+      return res.json({ url: session.url });
+    }
+
+    // ── CAS B : Template ou vol unique (flow existant) ────────────────────────
     let productName, priceCents, flightTypeId, validityMonths, pdfBg, cl1, cl2, cl3;
 
     if (template?.id) {
@@ -246,61 +328,10 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
       return res.status(400).json({ error: 'Template ou vol requis.' });
     }
 
-    const shipRes = await pool.query("SELECT value FROM site_settings WHERE key = 'physical_gift_card_price'");
-    const shipPriceCents = shipRes.rows.length > 0 ? (parseInt(shipRes.rows[0].value) || 0) * 100 : 0;
-
-    const line_items = [{
-      price_data: {
-        currency: 'eur',
-        product_data: { name: productName, description: `Bon cadeau offert par : ${buyer.name}` },
-        unit_amount: priceCents
-      },
+    line_items.unshift({
+      price_data: { currency: 'eur', product_data: { name: productName, description: `Bon cadeau offert par : ${buyer.name}` }, unit_amount: priceCents },
       quantity: qty
-    }];
-
-    let optionsTotalCents = 0;
-    let optionsText = '';
-    if (Array.isArray(selectedComplements) && selectedComplements.length > 0) {
-      const names = [];
-      for (const comp of selectedComplements) {
-        if (!comp?.id) return res.status(400).json({ error: 'ID option invalide.' });
-        const compRes = await pool.query(
-          'SELECT name, price_cents FROM complements WHERE id = $1 AND is_active = true',
-          [comp.id]
-        );
-        const dbComp = compRes.rows[0];
-        if (!dbComp) return res.status(400).json({ error: `Option introuvable ou désactivée (id: ${comp.id})` });
-        const compQty = (Number.isInteger(comp.quantity) && comp.quantity >= 1 && comp.quantity <= 10) ? comp.quantity : qty;
-        optionsTotalCents += dbComp.price_cents * compQty;
-        names.push(compQty > 1 ? `${dbComp.name} ×${compQty}` : dbComp.name);
-        line_items.push({
-          price_data: {
-            currency: 'eur',
-            product_data: { name: `Option incluse : ${dbComp.name}` },
-            unit_amount: dbComp.price_cents
-          },
-          quantity: compQty
-        });
-      }
-      optionsText = `Options incluses : ${names.join(', ')}\n`;
-    }
-
-    const shippingAddress = physicalShipping?.enabled && physicalShipping?.address
-      ? String(physicalShipping.address).substring(0, 499)
-      : '';
-    if (physicalShipping?.enabled && !shippingAddress) {
-      return res.status(400).json({ error: 'Adresse postale manquante.' });
-    }
-    if (physicalShipping?.enabled && shipPriceCents > 0) {
-      line_items.push({
-        price_data: {
-          currency: 'eur',
-          product_data: { name: "📮 Envoi Postal", description: "Carte glacée imprimée envoyée par courrier" },
-          unit_amount: shipPriceCents
-        },
-        quantity: 1
-      });
-    }
+    });
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
