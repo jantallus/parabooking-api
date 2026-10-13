@@ -868,6 +868,62 @@ router.get('/api/public/fluide/flight-types', async (req, res) => {
   }
 });
 
+// ── Endpoint AI agent : toutes les infos nécessaires pour réserver en un seul appel ──
+
+router.get('/api/public/booking-info', async (req, res) => {
+  try {
+    const [flightsRes, complementsRes] = await Promise.all([
+      pool.query(
+        `SELECT id, name, description, price_cents, duration_minutes, season, weight_min, weight_max, is_giftable
+         FROM flight_types
+         WHERE is_active = true AND (tenant = 'fluide' OR tenant IS NULL)
+         ORDER BY price_cents ASC`
+      ),
+      pool.query(
+        `SELECT id, name, description, price_cents
+         FROM complements
+         WHERE is_active = true
+         ORDER BY price_cents ASC`
+      ),
+    ]);
+
+    res.json({
+      business: {
+        name: 'Fluide Parapente',
+        location: 'La Clusaz, Haute-Savoie, France',
+        phone: '+33677285102',
+        booking_url: 'https://reservation.fluide-parapente.fr/booking',
+      },
+      flight_types: flightsRes.rows.map(f => ({
+        id: f.id,
+        name: f.name,
+        description: f.description,
+        price_euros: f.price_cents / 100,
+        duration_minutes: f.duration_minutes,
+        season: f.season || 'ALL',
+        weight_min_kg: f.weight_min,
+        weight_max_kg: f.weight_max,
+        giftable: f.is_giftable,
+      })),
+      options: complementsRes.rows.map(c => ({
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        price_euros: c.price_cents / 100,
+      })),
+      how_to_book: {
+        step1: 'GET /api/public/availabilities?start=YYYY-MM-DD&end=YYYY-MM-DD — liste des créneaux disponibles sur la période (champ status="available")',
+        step2: 'POST /api/public/checkout — corps JSON : { contact: { firstName, lastName, phone, email, isPassenger }, passengers: [{ flightId, flightName, date (YYYY-MM-DD), time (HH:MM), firstName, weightChecked }] }',
+        step3: 'Le serveur retourne { url } — URL de paiement Stripe à ouvrir par l\'utilisateur. La réservation est confirmée après paiement.',
+        note: 'Les créneaux ne sont pas bloqués avant le paiement. Vérifiez la disponibilité immédiatement avant de soumettre.',
+      },
+    });
+  } catch (err) {
+    console.error('[booking-info]', err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // ── Demande de vol Fluide (endpoint public, sans authentification) ─────────────
 
 const fluideRequestLimiter = rateLimit({
