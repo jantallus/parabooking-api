@@ -47,13 +47,29 @@ const availabilitiesLimiter = rateLimit({
 });
 
 router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res) => {
-  const { start, end } = req.query; 
+  const { start, end, flight_type_id } = req.query;
   try {
     if (!start || !end) return res.status(400).json({ error: "Période requise" });
-    
+
+    // Filtre optionnel par horaires autorisés du type de vol
+    let allowedTimeSlots = null;
+    if (flight_type_id) {
+      const ftRes = await pool.query('SELECT allowed_time_slots FROM flight_types WHERE id = $1', [flight_type_id]);
+      allowedTimeSlots = ftRes.rows[0]?.allowed_time_slots ?? null;
+    }
+
     // 1. Un seul appel pour récupérer la grille de la base de données
     const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ORDER BY start_time ASC`, [start, end]);
     let slots = r.rows;
+
+    // Applique le filtre horaires si nécessaire
+    if (allowedTimeSlots && allowedTimeSlots.length > 0) {
+      slots = slots.map(slot => {
+        const slotTime = new Date(slot.start_time).toTimeString().slice(0, 5);
+        if (!allowedTimeSlots.includes(slotTime)) return { ...slot, status: 'booked' };
+        return slot;
+      });
+    }
 
     // 2. Disponibilités moniteurs : si un moniteur a des périodes définies,
     //    tout créneau hors période est considéré indisponible.
