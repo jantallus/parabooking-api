@@ -122,8 +122,8 @@ describe('POST /api/flight-types', () => {
 
     const insertCall = pool.query.mock.calls.find(c => c[0].includes('INSERT INTO flight_types'));
     const params = insertCall[1];
-    // restricted_start_time est le 4e paramètre ($4)
-    expect(params[3]).toBeNull();
+    const columns = insertCall[0].match(/INSERT INTO flight_types \(([^)]+)\)/)[1].split(',').map(c => c.trim());
+    expect(params[columns.indexOf('restricted_start_time')]).toBeNull();
   });
 });
 

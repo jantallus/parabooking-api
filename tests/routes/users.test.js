@@ -248,16 +248,17 @@ describe('GET /api/monitors-admin', () => {
     expect(res.body).toHaveLength(2);
   });
 
-  it('filtre sur son propre id quand le rôle est monitor', async () => {
-    pool.query.mockResolvedValueOnce({ rows: [{ id: 2, first_name: 'Sophie', role: 'monitor' }] });
+  // Voulu : un moniteur temporaire doit pouvoir joindre les autres moniteurs
+  it('renvoie la liste complète à un moniteur', async () => {
+    pool.query.mockResolvedValueOnce({ rows: [{ id: 2, first_name: 'Sophie', role: 'monitor' }, { id: 4, first_name: 'Paul', role: 'monitor' }] });
 
-    await request(app)
+    const res = await request(app)
       .get('/api/monitors-admin')
       .set('Authorization', `Bearer ${monitorToken()}`);
 
-    const sqlCall = pool.query.mock.calls[0][0];
-    expect(sqlCall).toContain('AND id = $1');
-    expect(pool.query.mock.calls[0][1]).toContain(2); // id du monitorToken
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(pool.query.mock.calls[0][0]).not.toContain('AND id = $1');
   });
 });
 

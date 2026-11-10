@@ -58,9 +58,11 @@ describe('GET /api/slots', () => {
   });
 
   it('retourne 200 avec un token valide', async () => {
-    pool.query
-      .mockResolvedValueOnce({ rows: [{ id: 1, status: 'available', monitor_id: '2' }] }) // SELECT slots
-      .mockResolvedValueOnce({ rows: [] }); // SELECT site_settings (google_sync)
+    pool.query.mockImplementation(async (sql) =>
+      sql.startsWith('SELECT * FROM slots')
+        ? { rows: [{ id: 1, status: 'available', monitor_id: '2' }] }
+        : { rows: [] }
+    );
 
     const res = await request(app)
       .get('/api/slots')
@@ -112,9 +114,11 @@ describe('PATCH /api/slots/:id — contrôle des rôles', () => {
   });
 
   it('préfixe NON DISPO avec "(Admin)" quand l\'admin bloque', async () => {
-    pool.query
-      .mockResolvedValueOnce({ rows: [{ id: 1, status: 'available', title: 'NON DISPO (Admin)', monitor_id: '2' }] }) // UPDATE RETURNING
-      .mockResolvedValueOnce({ rows: [] }); // google sync check
+    pool.query.mockImplementation(async (sql) =>
+      sql.includes('UPDATE slots')
+        ? { rows: [{ id: 1, status: 'booked', title: 'NON DISPO (Admin)', monitor_id: '2' }] }
+        : { rows: [] }
+    );
 
     const res = await request(app)
       .patch('/api/slots/1')

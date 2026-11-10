@@ -71,6 +71,11 @@ function setupCheckoutMocks() {
     if (sql.includes('gift_cards'))                 return { rows: [] };
     if (sql.includes('BEGIN') || sql.includes('COMMIT')) return { rows: [] };
     if (sql.includes('site_settings'))              return { rows: [] };
+    // Créneau libre à 10:00 heure de Paris le 2026-06-15 (UTC+2 en été)
+    if (sql.includes('FROM slots')) return { rows: [{
+      id: 1, monitor_id: 2, status: 'available',
+      start_time: new Date('2026-06-15T08:00:00Z'), end_time: new Date('2026-06-15T08:15:00Z'),
+    }] };
     return { rows: [] };
   });
 
@@ -133,12 +138,8 @@ describe('POST /api/public/checkout', () => {
   it('retourne une URL Stripe si le body est valide', async () => {
     setupCheckoutMocks();
     const res = await request(app).post('/api/public/checkout').send(validCheckoutBody);
-    // Soit 200 avec url Stripe, soit 400 métier (vol inexistant) — les deux sont acceptables
-    // Le point clé : Zod ne bloque pas une requête valide
-    expect([200, 400]).toContain(res.status);
-    if (res.status === 200) {
-      expect(res.body.url).toContain('stripe');
-    }
+    expect(res.status).toBe(200);
+    expect(res.body.url).toContain('stripe');
   });
 });
 
