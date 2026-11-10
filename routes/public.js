@@ -871,7 +871,7 @@ router.post('/api/public/aravis/request', aravisRequestLimiter, async (req, res)
 // ── Takamaka : créneaux + blocage partenaire ──────────────────────────────────
 
 const TAKAMAKA_FLIGHT_TYPE_ID = parseInt(process.env.TAKAMAKA_FLIGHT_TYPE_ID || '19', 10);
-const TAKAMAKA_PARTNER_CODE = process.env.TAKAMAKA_PARTNER_CODE || 'TAKAMAKA';
+const TAKAMAKA_PARTNER_CODE = process.env.TAKAMAKA_PARTNER_CODE || 'TAKA2027';
 const TAKAMAKA_MAX_RANGE_DAYS = 31;
 const TAKAMAKA_MAX_PASSENGERS = 8;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
