@@ -7,7 +7,8 @@ const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { CheckoutSchema, CheckoutGiftCardSchema } = require('../schemas');
 const Stripe = require('stripe');
-const { sendConfirmationEmail, sendConfirmationSMS, sendAdminNotificationEmail } = require('../services/email');
+const crypto = require('crypto');
+const { sendConfirmationEmail, sendConfirmationSMS, sendAdminNotificationEmail, notifyGoogleCalendar } = require('../services/email');
 const { generatePDFBuffer } = require('../services/pdf');
 const { googleSyncCache } = require('../services/googleSync');
 const { performBooking } = require('../services/booking');
@@ -864,6 +865,280 @@ router.post('/api/public/aravis/request', aravisRequestLimiter, async (req, res)
   } catch (err) {
     console.error('[Aravis request]', err);
     res.status(500).json({ error: 'Erreur serveur. Votre demande n\'a pas pu être enregistrée.' });
+  }
+});
+
+// ── Takamaka : créneaux + blocage partenaire ──────────────────────────────────
+
+const TAKAMAKA_FLIGHT_TYPE_ID = parseInt(process.env.TAKAMAKA_FLIGHT_TYPE_ID || '19', 10);
+const TAKAMAKA_PARTNER_CODE = process.env.TAKAMAKA_PARTNER_CODE || 'TAKAMAKA';
+const TAKAMAKA_MAX_RANGE_DAYS = 31;
+const TAKAMAKA_MAX_PASSENGERS = 8;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const PARTNER_REF_RE = /^[A-Za-z0-9_\-./#]{1,100}$/;
+
+const parisDate = d => d.toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
+const parisTime = d => d.toLocaleTimeString('en-GB', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false });
+
+// Retourne { date: { heure: [séquence de créneaux contigus d'un moniteur libre, ...] } }.
+// Même calcul pour la lecture et le blocage, pour que l'un ne contredise jamais l'autre.
+async function findTakamakaSequences(db, from, to, { forUpdate = false } = {}) {
+  const ftRes = await db.query(
+    `SELECT duration_minutes, allowed_time_slots, booking_delay_hours FROM flight_types WHERE id = $1 AND is_active = true`,
+    [TAKAMAKA_FLIGHT_TYPE_ID]
+  );
+  if (ftRes.rows.length === 0) return {};
+  const { duration_minutes, allowed_time_slots, booking_delay_hours } = ftRes.rows[0];
+  const allowedTimes = allowed_time_slots || [];
+  const flightDur = duration_minutes || 15;
+  const cutoffMs = Date.now() + (booking_delay_hours || 0) * 3600 * 1000;
+
+  const { rows: slots } = await db.query(
+    `SELECT id, start_time, end_time, monitor_id
+     FROM slots
+     WHERE status = 'available'
+       AND monitor_id IS NOT NULL
+       AND start_time::date >= $1
+       AND start_time::date <= $2
+     ORDER BY start_time ASC${forUpdate ? ' FOR UPDATE' : ''}`,
+    [from, to]
+  );
+
+  const monitorIds = [...new Set(slots.map(s => s.monitor_id))];
+  const periodsByMonitor = {};
+  if (monitorIds.length > 0) {
+    const { rows: avRows } = await db.query(
+      `SELECT user_id, TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date, TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date
+       FROM monitor_availabilities WHERE user_id = ANY($1)`,
+      [monitorIds]
+    );
+    for (const row of avRows) (periodsByMonitor[row.user_id] ||= []).push(row);
+  }
+
+  const syncSetting = await db.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+  const googleSync = syncSetting.rows[0]?.value === 'true';
+  const isGoogleBusy = slot => {
+    if (!googleSync) return false;
+    const busy = googleSyncCache.get(slot.monitor_id) || [];
+    const s = new Date(slot.start_time).getTime();
+    const e = new Date(slot.end_time).getTime();
+    return busy.some(g => s < g.end && e > g.start);
+  };
+
+  const byMonitor = {};
+  for (const slot of slots) (byMonitor[slot.monitor_id] ||= []).push(slot);
+
+  const result = {};
+  for (const monSlots of Object.values(byMonitor)) {
+    for (let i = 0; i < monSlots.length; i++) {
+      const start = new Date(monSlots[i].start_time);
+      if (start.getTime() <= cutoffMs) continue;
+      const dateStr = parisDate(start);
+      const timeStr = parisTime(start);
+      if (allowedTimes.length > 0 && !allowedTimes.includes(timeStr)) continue;
+
+      const periods = periodsByMonitor[monSlots[i].monitor_id];
+      if (periods?.length > 0 && !periods.some(p => dateStr >= p.start_date && dateStr <= p.end_date)) continue;
+
+      const baseDur = Math.round((new Date(monSlots[i].end_time) - start) / 60000) || 15;
+      const needed = Math.ceil(flightDur / baseDur);
+      const sequence = monSlots.slice(i, i + needed);
+      if (sequence.length < needed) continue;
+      const contiguous = sequence.every((s, k) =>
+        k === 0 || Math.abs(new Date(s.start_time) - new Date(sequence[k - 1].end_time)) <= 60000
+      );
+      if (!contiguous || sequence.some(isGoogleBusy)) continue;
+
+      ((result[dateStr] ||= {})[timeStr] ||= []).push(sequence);
+    }
+  }
+  return result;
+}
+
+function requireTakamakaKey(req, res, next) {
+  const expected = process.env.TAKAMAKA_API_KEY;
+  const given = req.get('x-api-key');
+  if (!expected || !given) return res.status(401).json({ error: 'Clé API absente ou invalide.' });
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'Clé API absente ou invalide.' });
+  }
+  next();
+}
+
+const takamakaBookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: 'Trop de requêtes. Veuillez patienter un instant.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.get('/api/public/takamaka/slots', availabilitiesLimiter, async (req, res) => {
+  const { from, to } = req.query;
+  if (!DATE_RE.test(from || '') || !DATE_RE.test(to || '')) {
+    return res.status(400).json({ error: 'Paramètres from et to requis (YYYY-MM-DD).' });
+  }
+  const rangeDays = (new Date(`${to}T00:00:00Z`) - new Date(`${from}T00:00:00Z`)) / 86400000;
+  if (Number.isNaN(rangeDays) || rangeDays < 0) {
+    return res.status(400).json({ error: 'La date to doit être postérieure ou égale à from.' });
+  }
+  if (rangeDays + 1 > TAKAMAKA_MAX_RANGE_DAYS) {
+    return res.status(400).json({ error: `Période limitée à ${TAKAMAKA_MAX_RANGE_DAYS} jours.` });
+  }
+
+  try {
+    const sequences = await findTakamakaSequences(pool, from, to);
+    const result = {};
+    for (const date of Object.keys(sequences).sort()) {
+      result[date] = Object.fromEntries(
+        Object.keys(sequences[date]).sort().map(t => [t, sequences[date][t].length])
+      );
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('[Takamaka slots]', err);
+    res.status(500).json({ error: 'Erreur serveur.' });
+  }
+});
+
+router.post('/api/public/takamaka/book', takamakaBookLimiter, requireTakamakaKey, async (req, res) => {
+  const { date, time, nb_passengers = 1, partner_ref } = req.body || {};
+  const nb = Number(nb_passengers);
+  if (!DATE_RE.test(date || '') || !TIME_RE.test(time || '')) {
+    return res.status(400).json({ error: 'date (YYYY-MM-DD) et time (HH:MM) requis.' });
+  }
+  if (!Number.isInteger(nb) || nb < 1 || nb > TAKAMAKA_MAX_PASSENGERS) {
+    return res.status(400).json({ error: `nb_passengers doit être un entier entre 1 et ${TAKAMAKA_MAX_PASSENGERS}.` });
+  }
+  const ref = typeof partner_ref === 'string' ? partner_ref.trim() : '';
+  if (!PARTNER_REF_RE.test(ref)) {
+    return res.status(400).json({ error: 'partner_ref requis : 100 caractères max, lettres, chiffres et - _ . / #' });
+  }
+
+  const client = await pool.connect();
+  let booked;
+  let partner;
+  try {
+    await client.query('BEGIN');
+
+    const partnerRes = await client.query(
+      `SELECT id, name, code, color_code FROM partners WHERE UPPER(code) = UPPER($1) AND is_active = true`,
+      [TAKAMAKA_PARTNER_CODE]
+    );
+    if (partnerRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      console.error(`[Takamaka book] Partenaire "${TAKAMAKA_PARTNER_CODE}" introuvable ou inactif`);
+      return res.status(503).json({ error: 'Intégration non configurée côté Parabooking.' });
+    }
+    partner = partnerRes.rows[0];
+
+    // Verrouille les créneaux libres du jour avant le contrôle de doublon : deux appels
+    // simultanés avec la même référence attendent ici, le second voit alors le premier.
+    const sequences = (await findTakamakaSequences(client, date, date, { forUpdate: true }))[date]?.[time] || [];
+
+    const existing = await client.query(
+      `SELECT id, start_time FROM slots
+       WHERE status = 'booked'
+         AND payment_data->>'partner_id' = $1
+         AND payment_data->>'partner_ref' = $2
+         AND title NOT LIKE '↪️ Suite%'
+       ORDER BY start_time, id`,
+      [String(partner.id), ref]
+    );
+    if (existing.rows.length > 0) {
+      await client.query('ROLLBACK');
+      const first = new Date(existing.rows[0].start_time);
+      return res.json({
+        booking_id: existing.rows[0].id,
+        slot_ids: existing.rows.map(r => r.id),
+        date: parisDate(first),
+        time: parisTime(first),
+        nb_passengers: existing.rows.length,
+        status: 'confirmed',
+        already_booked: true,
+      });
+    }
+
+    if (sequences.length < nb) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        error: 'Créneau non disponible. Re-consultez GET /slots et proposez un autre horaire.',
+        available: sequences.length,
+      });
+    }
+
+    const paymentData = {
+      partner: true,
+      partner_id: partner.id,
+      partner_name: partner.name,
+      code: partner.code,
+      partner_color: partner.color_code,
+      partner_ref: ref,
+      source: 'takamaka_api',
+    };
+
+    booked = sequences.slice(0, nb);
+    for (let p = 0; p < booked.length; p++) {
+      const label = nb > 1 ? `${partner.name} ${ref} (${p + 1}/${nb})` : `${partner.name} ${ref}`;
+      for (let k = 0; k < booked[p].length; k++) {
+        await client.query(
+          `UPDATE slots
+           SET status = 'booked', title = $1, notes = $2, flight_type_id = $3, weight_checked = true, payment_data = $4
+           WHERE id = $5`,
+          [
+            k === 0 ? label : `↪️ Suite ${label}`,
+            k === 0 ? `Réservation partenaire ${partner.name} (API)` : 'Extension auto',
+            TAKAMAKA_FLIGHT_TYPE_ID,
+            JSON.stringify(paymentData),
+            booked[p][k].id,
+          ]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[Takamaka book]', err);
+    return res.status(500).json({ error: 'Erreur serveur.' });
+  } finally {
+    client.release();
+  }
+
+  const firstIds = booked.map(seq => seq[0].id);
+  res.json({
+    booking_id: firstIds[0],
+    slot_ids: firstIds,
+    date,
+    time,
+    nb_passengers: nb,
+    status: 'confirmed',
+  });
+
+  // Agenda Google des moniteurs + notification admin, après la réponse pour ne pas la retarder
+  try {
+    const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+    if (syncSetting.rows[0]?.value === 'true') {
+      for (const seq of booked) {
+        const monRes = await pool.query('SELECT first_name, google_sync_enabled FROM users WHERE id = $1', [seq[0].monitor_id]);
+        const mon = monRes.rows[0];
+        if (!mon?.google_sync_enabled) continue;
+        const last = seq[seq.length - 1];
+        notifyGoogleCalendar(mon.first_name, `${partner.name} ${ref}`, seq[0].start_time, last.end_time, `Réservation partenaire ${partner.name}\nRéf: ${ref}\n`);
+        await pool.query(
+          `UPDATE slots SET payment_data = COALESCE(payment_data, '{}') || '{"google_synced": true}'::jsonb WHERE id = $1`,
+          [seq[0].id]
+        );
+      }
+    }
+    const ftRes = await pool.query('SELECT name FROM flight_types WHERE id = $1', [TAKAMAKA_FLIGHT_TYPE_ID]);
+    const beautifulDate = new Date(`${date}T12:00:00`).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+    await sendAdminNotificationEmail(`${partner.name} — réf. ${ref}`, '—', '—', ftRes.rows[0]?.name || 'Vol', beautifulDate, time, nb);
+  } catch (e) {
+    console.error('[Takamaka book] notifications', e);
   }
 });
 
