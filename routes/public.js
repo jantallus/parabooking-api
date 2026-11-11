@@ -47,6 +47,12 @@ const availabilitiesLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Reprend la règle « créneau client » du planning (routes/planning.js), élargie aux pauses non admin et blocages Google
+const NON_CLIENT_TITLES = ['NOTE', 'PAUSE', 'NON DISPO', 'BLOQUÉ', '❌'];
+function isClientBookingTitle(title) {
+  return !!title && !NON_CLIENT_TITLES.some(t => title.includes(t));
+}
+
 router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res) => {
   const { start, end, flight_type_id } = req.query;
   try {
@@ -60,14 +66,19 @@ router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res)
     }
 
     // 1. Un seul appel pour récupérer la grille de la base de données
-    const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ORDER BY start_time ASC`, [start, end]);
-    let slots = r.rows;
+    const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id, title FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ORDER BY start_time ASC`, [start, end]);
+    // 'booked' = vraie réservation client (affichée « Complet ») ; 'unavailable' = pause, NON DISPO, note…
+    // (masqué). Le titre sert au classement et n'est jamais renvoyé.
+    let slots = r.rows.map(({ title, ...slot }) => {
+      if (slot.status === 'available') return slot;
+      return { ...slot, status: isClientBookingTitle(title) ? 'booked' : 'unavailable' };
+    });
 
     // Applique le filtre horaires si nécessaire
     if (allowedTimeSlots && allowedTimeSlots.length > 0) {
       slots = slots.map(slot => {
         const slotTime = new Date(slot.start_time).toTimeString().slice(0, 5);
-        if (!allowedTimeSlots.includes(slotTime)) return { ...slot, status: 'booked' };
+        if (!allowedTimeSlots.includes(slotTime)) return { ...slot, status: 'unavailable' };
         return slot;
       });
     }
@@ -99,7 +110,7 @@ router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res)
       const slotDate = new Date(slot.start_time);
       const slotDateStr = slotDate.toISOString().slice(0, 10);
       const inPeriod = periods.some(p => slotDateStr >= p.start_date && slotDateStr <= p.end_date);
-      if (!inPeriod) return { ...slot, status: 'booked' };
+      if (!inPeriod) return { ...slot, status: 'unavailable' };
       return slot;
     });
 
@@ -115,7 +126,7 @@ router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res)
           const slotStart = new Date(slot.start_time).getTime();
           const slotEnd = new Date(slot.end_time).getTime();
           const isBusy = googleBusySlots.some(g => slotStart < g.end && slotEnd > g.start);
-          if (isBusy) return { ...slot, status: 'booked' };
+          if (isBusy) return { ...slot, status: 'unavailable' };
         }
         return slot;
       });
